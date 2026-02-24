@@ -43,7 +43,7 @@ class RTMSSignalingClient:
         await client.close()
     """
 
-    _CONNECT_TIMEOUT: float = 5.0   # seconds per URL attempt
+    _CONNECT_TIMEOUT: float = 5.0  # seconds per URL attempt
     _HANDSHAKE_TIMEOUT: float = 10.0  # seconds to wait for HANDSHAKE_RESP
 
     def __init__(
@@ -169,9 +169,7 @@ class RTMSSignalingClient:
 
         status_code = resp.get("status_code", -1)
         if status_code != 0:
-            raise RTMSSignalingError(
-                f"RTMS auth rejected: status_code={status_code}"
-            )
+            raise RTMSSignalingError(f"RTMS auth rejected: status_code={status_code}")
 
         media_urls: list[str] = resp.get("media_server", {}).get("server_urls", [])
         if not media_urls:
@@ -200,7 +198,9 @@ class RTMSSignalingClient:
                 if msg_type == 12:
                     resp = {"msg_type": 13, "timestamp": msg.get("timestamp")}
                     await self._ws.send(json.dumps(resp))
-                    logger.debug("Signaling: keepalive echoed (ts=%s)", msg.get("timestamp"))
+                    logger.debug(
+                        "Signaling: keepalive echoed (ts=%s)", msg.get("timestamp")
+                    )
                 else:
                     logger.debug("Signaling: unhandled msg_type=%s", msg_type)
 

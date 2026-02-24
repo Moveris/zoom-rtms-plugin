@@ -51,12 +51,17 @@ class H264Decoder:
 
     _FFMPEG_CMD: list[str] = [
         "ffmpeg",
-        "-loglevel", "error",    # suppress informational output; errors still logged
-        "-f", "h264",            # input format: raw H.264 bitstream
-        "-i", "pipe:0",          # read from stdin
-        "-f", "image2pipe",      # output format: image pipe
-        "-vcodec", "ppm",        # PPM is self-framing (no need to know resolution)
-        "pipe:1",                # write to stdout
+        "-loglevel",
+        "error",  # suppress informational output; errors still logged
+        "-f",
+        "h264",  # input format: raw H.264 bitstream
+        "-i",
+        "pipe:0",  # read from stdin
+        "-f",
+        "image2pipe",  # output format: image pipe
+        "-vcodec",
+        "ppm",  # PPM is self-framing (no need to know resolution)
+        "pipe:1",  # write to stdout
     ]
 
     def __init__(
@@ -66,7 +71,7 @@ class H264Decoder:
     ) -> None:
         self._cmd = _cmd or self._FFMPEG_CMD
         self._queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=queue_size)
-        self._process: Any = None   # asyncio.subprocess.Process
+        self._process: Any = None  # asyncio.subprocess.Process
         self._reader_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
@@ -159,7 +164,9 @@ class H264Decoder:
                 if not magic:
                     break  # clean EOF from FFmpeg
                 if magic != b"P6":
-                    logger.warning("H264Decoder: unexpected PPM magic %r — skipping", magic)
+                    logger.warning(
+                        "H264Decoder: unexpected PPM magic %r — skipping", magic
+                    )
                     continue
 
                 # --- dimensions line: "width height" ---
@@ -174,13 +181,18 @@ class H264Decoder:
                 frame_bytes = await stdout.readexactly(n_bytes)
 
                 # PPM stores RGB; reshape and flip to BGR for OpenCV compatibility
-                frame = np.frombuffer(frame_bytes, dtype=np.uint8).reshape(height, width, 3)
+                frame = np.frombuffer(frame_bytes, dtype=np.uint8).reshape(
+                    height, width, 3
+                )
                 bgr = frame[..., ::-1].copy()
 
                 if not self._queue.full():
                     self._queue.put_nowait(bgr)
                 else:
-                    logger.debug("H264Decoder: frame dropped (queue full at %d)", self._queue.maxsize)
+                    logger.debug(
+                        "H264Decoder: frame dropped (queue full at %d)",
+                        self._queue.maxsize,
+                    )
 
         except asyncio.IncompleteReadError:
             logger.info("H264Decoder: FFmpeg stdout closed (EOF mid-frame)")

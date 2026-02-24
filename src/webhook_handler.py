@@ -72,7 +72,9 @@ async def handle_rtms_started(
     server_urls: list[str] = obj["server_urls"]
 
     asyncio.create_task(on_rtms_start(meeting_uuid, rtms_stream_id, server_urls))
-    logger.info("Spawned RTMS task — meeting=%s stream=%s", meeting_uuid, rtms_stream_id)
+    logger.info(
+        "Spawned RTMS task — meeting=%s stream=%s", meeting_uuid, rtms_stream_id
+    )
     return JSONResponse({"status": "ok"})
 
 
