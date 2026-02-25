@@ -10,7 +10,11 @@ from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
 from src.main import app
-from src.webhook_handler import handle_url_validation, process_webhook, validate_zoom_signature
+from src.webhook_handler import (
+    handle_url_validation,
+    process_webhook,
+    validate_zoom_signature,
+)
 
 # Matches the ZOOM_WEBHOOK_SECRET_TOKEN set by conftest.override_settings
 SECRET = "test_webhook_secret"
@@ -68,7 +72,9 @@ def test_handle_url_validation_correct_tokens():
     response = handle_url_validation({"plainToken": "mytoken123"})
     data = json.loads(response.body)
     assert data["plainToken"] == "mytoken123"
-    expected = hmac.new(SECRET.encode(), "mytoken123".encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(
+        SECRET.encode(), "mytoken123".encode(), hashlib.sha256
+    ).hexdigest()
     assert data["encryptedToken"] == expected
 
 
@@ -79,7 +85,9 @@ def test_handle_url_validation_correct_tokens():
 
 async def test_endpoint_url_validation_no_signature_needed():
     """URL validation must succeed without a Zoom signature header."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         response = await c.post(
             "/zoom/webhook",
             json={
@@ -107,7 +115,9 @@ async def test_endpoint_invalid_signature_returns_401():
             },
         }
     )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         response = await c.post(
             "/zoom/webhook",
             content=body_str,
@@ -130,7 +140,9 @@ async def test_endpoint_rtms_started_valid_signature_returns_200():
     ts = "1700000000"
     sig = make_zoom_signature(SECRET, ts, body_str)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         response = await c.post(
             "/zoom/webhook",
             content=body_str,
@@ -150,7 +162,9 @@ async def test_endpoint_rtms_stopped_valid_signature_returns_200():
     ts = "1700000000"
     sig = make_zoom_signature(SECRET, ts, body_str)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         response = await c.post(
             "/zoom/webhook",
             content=body_str,
@@ -169,7 +183,9 @@ async def test_endpoint_unknown_event_with_valid_signature_returns_200():
     ts = "1700000000"
     sig = make_zoom_signature(SECRET, ts, body_str)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         response = await c.post(
             "/zoom/webhook",
             content=body_str,
@@ -184,7 +200,9 @@ async def test_endpoint_unknown_event_with_valid_signature_returns_200():
 
 
 async def test_endpoint_invalid_json_returns_400():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         response = await c.post(
             "/zoom/webhook",
             content=b"not-json",
@@ -207,12 +225,15 @@ async def test_rtms_started_dispatches_callback():
     ) -> None:
         calls.append(meeting_uuid)
 
-    # Build a minimal test app that injects our mock callback
+    async def mock_rtms_stop(meeting_uuid: str) -> None:
+        pass
+
+    # Build a minimal test app that injects our mock callbacks
     test_app = FastAPI()
 
     @test_app.post("/zoom/webhook")
     async def webhook(request: Request) -> JSONResponse:
-        return await process_webhook(request, mock_rtms_start)
+        return await process_webhook(request, mock_rtms_start, mock_rtms_stop)
 
     obj = {
         "meeting_uuid": "mtg-dispatch",
@@ -223,7 +244,9 @@ async def test_rtms_started_dispatches_callback():
     ts = "1700000000"
     sig = make_zoom_signature(SECRET, ts, body_str)
 
-    async with AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=test_app), base_url="http://test"
+    ) as c:
         response = await c.post(
             "/zoom/webhook",
             content=body_str,

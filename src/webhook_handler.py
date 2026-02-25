@@ -15,8 +15,9 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Type alias for the RTMS session starter injected by the orchestrator (Phase 9).
+# Callback types injected by the orchestrator.
 RTMSStartCallback = Callable[[str, str, str], Coroutine[Any, Any, None]]
+RTMSStopCallback = Callable[[str], Coroutine[Any, Any, None]]
 
 
 def validate_zoom_signature(
@@ -78,16 +79,22 @@ async def handle_rtms_started(
     return JSONResponse({"status": "ok"})
 
 
-async def handle_rtms_stopped(obj: dict) -> JSONResponse:
-    """Acknowledge ``meeting.rtms_stopped``; cleanup is handled by the orchestrator."""
-    meeting_uuid = obj.get("meeting_uuid", "unknown")
-    logger.info("RTMS stopped — meeting=%s", meeting_uuid)
+async def handle_rtms_stopped(
+    obj: dict,
+    on_rtms_stop: RTMSStopCallback,
+) -> JSONResponse:
+    """Acknowledge ``meeting.rtms_stopped`` and dispatch cleanup to the orchestrator."""
+    meeting_uuid = obj.get("meeting_uuid", "")
+    if meeting_uuid:
+        asyncio.create_task(on_rtms_stop(meeting_uuid))
+    logger.info("RTMS stopped — meeting=%s", meeting_uuid or "unknown")
     return JSONResponse({"status": "ok"})
 
 
 async def process_webhook(
     request: Request,
     on_rtms_start: RTMSStartCallback,
+    on_rtms_stop: RTMSStopCallback,
 ) -> JSONResponse:
     """Main dispatcher: validate Zoom signature then route to the right handler.
 
@@ -125,7 +132,7 @@ async def process_webhook(
         return await handle_rtms_started(obj, on_rtms_start)
 
     if event == "meeting.rtms_stopped":
-        return await handle_rtms_stopped(obj)
+        return await handle_rtms_stopped(obj, on_rtms_stop)
 
     # Forward-compatible: silently acknowledge any event we don't handle yet.
     logger.debug("Unhandled webhook event: %s", event)
