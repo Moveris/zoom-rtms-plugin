@@ -14,7 +14,7 @@ _result_store = InMemoryResultStore()
 
 
 async def _stub_rtms_start(
-    meeting_uuid: str, rtms_stream_id: str, server_urls: list[str]
+    meeting_uuid: str, rtms_stream_id: str, server_urls: str
 ) -> None:
     """Placeholder RTMS session starter — replaced by orchestrator in Phase 9."""
     logger.info(

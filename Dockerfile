@@ -9,12 +9,10 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # Stage 2: Runtime image
 FROM python:3.12-slim
 
-# FFmpeg: H.264 decoding
 # libgl1 + libglib2.0-0: required by MediaPipe even in headless mode
 # (libgl1-mesa-glx was renamed to libgl1 in Ubuntu 24.04+)
 # curl: used by Docker healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
     libgl1 \
     libglib2.0-0 \
     curl \

@@ -16,7 +16,7 @@ from src.config import get_settings
 logger = logging.getLogger(__name__)
 
 # Type alias for the RTMS session starter injected by the orchestrator (Phase 9).
-RTMSStartCallback = Callable[[str, str, list[str]], Coroutine[Any, Any, None]]
+RTMSStartCallback = Callable[[str, str, str], Coroutine[Any, Any, None]]
 
 
 def validate_zoom_signature(
@@ -69,7 +69,7 @@ async def handle_rtms_started(
     """
     meeting_uuid: str = obj["meeting_uuid"]
     rtms_stream_id: str = obj["rtms_stream_id"]
-    server_urls: list[str] = obj["server_urls"]
+    server_urls: str = obj["server_urls"]
 
     asyncio.create_task(on_rtms_start(meeting_uuid, rtms_stream_id, server_urls))
     logger.info(

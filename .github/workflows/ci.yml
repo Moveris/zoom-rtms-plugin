@@ -42,7 +42,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libgl1 libglib2.0-0
+          sudo apt-get install -y libgl1 libglib2.0-0
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
@@ -67,6 +67,9 @@ jobs:
 
       - name: Smoke test — mediapipe import
         run: docker run --rm zoom-rtms-plugin:ci python -c "import mediapipe; print('mediapipe ok')"
+
+      - name: Smoke test — rtms import
+        run: docker run --rm zoom-rtms-plugin:ci python -c "import rtms; print('rtms ok')"
 
       - name: Smoke test — app import
         run: docker run --rm zoom-rtms-plugin:ci python -c "import src.main; print('app ok')"
