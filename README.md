@@ -2,9 +2,9 @@
 
 Real-time liveness detection for Zoom meetings. Connects Zoom's Real-Time Media Streaming (RTMS) API to the [Moveris](https://moveris.com) liveness detection API so hosts can verify that participants are real humans — not deepfakes or AI-generated faces — during a live call.
 
-[![CI](https://github.com/Moveris/zoom-rtms-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/Moveris/zoom-rtms-plugin/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20.3.0-brightgreen.svg)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/typescript-5.7-blue.svg)](https://www.typescriptlang.org)
 
 ---
 
@@ -12,45 +12,44 @@ Real-time liveness detection for Zoom meetings. Connects Zoom's Real-Time Media 
 
 ```
 Zoom Meeting
-  │
-  │  (1) meeting.rtms_started webhook
-  ▼
-┌─────────────────────────────────────────────────────────┐
-│                   zoom-rtms-plugin                       │
-│                                                          │
-│  Webhook Handler ──► RTMS Signaling WS ──► RTMS Media WS│
-│                                                  │        │
-│                                            H.264 NAL     │
-│                                                  │        │
-│                                           H264Decoder    │
-│                                        (FFmpeg asyncio)  │
-│                                                  │        │
-│                                          FaceDetector    │
-│                                         (MediaPipe)      │
-│                                                  │        │
-│                                        224×224 PNG crops │
-│                                                  │        │
-│                                       MoverisClient      │
-│                                    (POST /fast-check-crops│
-│                                                  │        │
-│                                         ResultStore      │
-└─────────────────────────────────────────────────────────┘
-  │
-  │  (2) GET /results/{meeting_uuid}
-  ▼
+  |
+  |  (1) meeting.rtms_started webhook
+  v
++-----------------------------------------------------------+
+|                    zoom-rtms-plugin                        |
+|                                                           |
+|  Webhook Handler -----> RTMSClient (@zoom/rtms SDK)       |
+|  (rtms.createWebhookHandler)    |                         |
+|                            PNG video frames               |
+|                            per participant                 |
+|                                 |                         |
+|                          frame-processor                  |
+|                       (sharp resize 640x480               |
+|                        + blur analysis)                   |
+|                                 |                         |
+|                        BaseFrameCollector                 |
+|                      (10 quality frames)                  |
+|                                 |                         |
+|                    LivenessClient.fastCheck()              |
+|                       (@moveris/shared SDK)               |
+|                                 |                         |
+|                           ResultStore                     |
++-----------------------------------------------------------+
+  |
+  |  (2) GET /results/{meeting_uuid}
+  v
 LivenessResult: verdict=live|fake, score=0-100
 ```
 
 | Step | What happens |
 |------|-------------|
-| 1 | Zoom fires `meeting.rtms_started` webhook → plugin validates signature and spawns async task |
-| 2 | Plugin connects to RTMS signaling WebSocket → negotiates media stream URL |
-| 3 | Plugin connects to RTMS media WebSocket → receives H.264 video frames per participant |
-| 4 | FFmpeg (asyncio subprocess) decodes H.264 NAL units → BGR frames |
-| 5 | MediaPipe detects faces → crops 224×224 PNG (3× face bounding box) |
-| 6 | Plugin POSTs 10 quality-filtered crops to `POST /api/v1/fast-check-crops` |
-| 7 | Moveris returns verdict: `live` / `fake`, score 0–100 |
-| 8 | Results stored and available at `GET /results/{meeting_uuid}` |
+| 1 | Zoom fires `meeting.rtms_started` webhook. The plugin validates the signature using `rtms.createWebhookHandler()` and starts a session. |
+| 2 | `RTMSClient` (wrapping `@zoom/rtms` SDK `Client`) joins the RTMS stream and receives PNG video frames per participant at 10 FPS. |
+| 3 | Each frame is checked for blur using `analyzeBlur()` from `@moveris/shared`, then resized to 640x480 with `sharp`. |
+| 4 | `BaseFrameCollector` from `@moveris/shared` collects 10 quality frames per participant. |
+| 5 | Frames are submitted to `LivenessClient.fastCheck()` from `@moveris/shared` with `source: "live"`. |
+| 6 | Moveris returns a verdict (`live` / `fake`), score (0-100), and confidence. |
+| 7 | Results are stored and available at `GET /results/{meeting_uuid}`. |
 
 ---
 
@@ -60,7 +59,7 @@ LivenessResult: verdict=live|fake, score=0-100
 
 - Zoom account (Business/Education/Enterprise) with RTMS enabled
 - [Moveris API key](https://documentation.moveris.com/)
-- Docker + Docker Compose
+- Node.js >= 20.3.0 (or Docker)
 
 ### 1. Clone and configure
 
@@ -81,8 +80,18 @@ MOVERIS_API_KEY=sk-your-moveris-api-key
 
 ### 2. Start the service
 
+**With Docker (recommended):**
+
 ```bash
-docker-compose up
+docker compose up
+```
+
+**Without Docker:**
+
+```bash
+npm install
+npm run build
+npm start
 ```
 
 The service starts on `http://localhost:8080`.
@@ -96,16 +105,24 @@ ngrok http 8080
 
 ### 4. Configure Zoom webhook
 
-In [Zoom Marketplace](https://marketplace.zoom.us) → your General App → **Feature** → **Event Subscriptions**:
+In [Zoom Marketplace](https://marketplace.zoom.us) -> your General App -> **Feature** -> **Event Subscriptions**:
 
 - Endpoint URL: `https://your-ngrok-url/zoom/webhook`
 - Events: `meeting.rtms_started`, `meeting.rtms_stopped`
 
-Click **Validate** — the plugin will respond to the URL validation challenge automatically.
+Click **Validate** — the plugin responds to URL validation challenges automatically via the `@zoom/rtms` SDK webhook handler.
 
-### 5. Run a meeting and check results
+### 5. Trigger RTMS for a live meeting (dev only)
 
-Start a Zoom meeting with RTMS enabled. After ~5 seconds of video:
+Once the Zoom OAuth flow is completed (visit the app's install URL), you can trigger RTMS for an active meeting:
+
+```bash
+curl -X POST http://localhost:8080/dev/start-rtms/{meetingId}
+```
+
+### 6. Check results
+
+After ~5 seconds of video per participant:
 
 ```bash
 curl http://localhost:8080/results/{meeting_uuid}
@@ -113,17 +130,25 @@ curl http://localhost:8080/results/{meeting_uuid}
 
 ```json
 {
-  "meeting_uuid": "abc123",
+  "meetingUuid": "abc123",
   "state": "complete",
   "participants": {
     "12345": {
-      "verdict": "live",
-      "score": 87.3,
-      "confidence": 0.94,
-      "frames_processed": 10,
-      "passed": true
+      "meetingUuid": "abc123",
+      "participantId": "12345",
+      "result": {
+        "verdict": "live",
+        "score": 87,
+        "confidence": 94,
+        "sessionId": "uuid-here",
+        "processingMs": 320,
+        "framesProcessed": 10
+      },
+      "completedAt": "2026-02-25T12:00:00.000Z"
     }
-  }
+  },
+  "startedAt": "2026-02-25T11:59:50.000Z",
+  "completedAt": "2026-02-25T12:00:01.000Z"
 }
 ```
 
@@ -133,9 +158,11 @@ curl http://localhost:8080/results/{meeting_uuid}
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/zoom/webhook` | Zoom webhook receiver — validates HMAC-SHA256 signature, handles `endpoint.url_validation`, `meeting.rtms_started`, `meeting.rtms_stopped` |
-| `GET` | `/results/{meeting_uuid}` | Poll for session status and per-participant liveness results |
-| `GET` | `/health` | Health check — returns `{"status":"ok","version":"...","active_sessions":N}` |
+| `POST` | `/zoom/webhook` | Zoom webhook receiver. Uses `rtms.createWebhookHandler()` for URL validation and signature verification. Dispatches `meeting.rtms_started` and `meeting.rtms_stopped` events. |
+| `GET` | `/results/{meeting_uuid}` | Poll for session status and per-participant liveness results. |
+| `GET` | `/health` | Health check — returns `{"status":"ok","version":"0.1.0","active_sessions":N,"zoom_token":"present|missing"}` |
+| `GET` | `/oauth/callback` | Zoom OAuth callback — exchanges authorization code for access token. |
+| `POST` | `/dev/start-rtms/{meetingId}` | Dev-only — triggers RTMS for an active meeting via the Zoom REST API. Requires a valid OAuth token. |
 
 ---
 
@@ -145,89 +172,116 @@ All settings via environment variables (or `.env` file):
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `ZOOM_CLIENT_ID` | str | **required** | Zoom General App client ID |
-| `ZOOM_CLIENT_SECRET` | str | **required** | Zoom General App client secret |
-| `ZOOM_WEBHOOK_SECRET_TOKEN` | str | **required** | Webhook signature validation token |
-| `MOVERIS_API_KEY` | str | **required** | Moveris API key (`sk-...`) |
-| `MOVERIS_MODE` | `fast`\|`live` | `fast` | `fast` = 10 frames (~1s); `live` = 250 frames (~10s) continuous |
-| `FRAME_SAMPLE_RATE` | int | `5` | Process every Nth frame from the 30fps stream |
-| `LIVENESS_THRESHOLD` | int | `65` | Minimum Moveris score to pass (`verdict=live` requires score ≥ this) |
-| `MAX_CONCURRENT_SESSIONS` | int | `50` | Max simultaneous RTMS sessions; returns 429 above this limit |
-| `LOG_LEVEL` | str | `INFO` | Python logging level |
+| `ZOOM_CLIENT_ID` | string | **required** | Zoom General App client ID |
+| `ZOOM_CLIENT_SECRET` | string | **required** | Zoom General App client secret |
+| `ZOOM_WEBHOOK_SECRET_TOKEN` | string | **required** | Webhook signature validation token (from Zoom Marketplace app settings) |
+| `MOVERIS_API_KEY` | string | **required** | Moveris API key (`sk-...`) |
+| `FRAME_SAMPLE_RATE` | int | `10` | Video FPS requested from RTMS. Moveris recommends 10 FPS for natural signal capture. |
+| `LIVENESS_THRESHOLD` | int | `65` | Minimum Moveris score to consider a participant "live" |
+| `MAX_CONCURRENT_SESSIONS` | int | `50` | Max simultaneous RTMS sessions. `startSession()` throws `TooManySessions` above this limit. |
+| `LOG_LEVEL` | string | `info` | Log level — also configures the `@zoom/rtms` SDK logger. Values: `error`, `warn`, `info`, `debug`, `trace` |
+| `PORT` | int | `8080` | HTTP server port |
+
+---
+
+## Architecture
+
+### SDKs used
+
+This plugin is built on two official SDKs — no custom protocol handling, no manual HMAC validation, no face detection pipeline:
+
+| SDK | Purpose |
+|-----|---------|
+| [`@zoom/rtms`](https://www.npmjs.com/package/@zoom/rtms) | RTMS stream connection, webhook handling, signature generation, session events |
+| [`@moveris/shared`](https://documentation.moveris.com/sdk/overview/) | Liveness API client, frame collection, blur analysis, session ID generation |
+
+### Project structure
+
+```
+src/
+  index.ts              # Entrypoint: config, SDK logger, server, graceful shutdown
+  config.ts             # Zod-validated environment config
+  app.ts                # Express app factory, mounts all routes
+  types.ts              # ParticipantResult, SessionStatus interfaces
+  orchestrator.ts       # SessionOrchestrator + per-participant frame pipeline
+  rtms-client.ts        # Thin wrapper around @zoom/rtms Client
+  frame-processor.ts    # sharp resize + @moveris/shared blur analysis
+  results.ts            # ResultStore interface + InMemoryResultStore
+  routes/
+    webhook.ts          # POST /zoom/webhook (rtms.createWebhookHandler)
+    oauth.ts            # GET /oauth/callback
+    dev.ts              # POST /dev/start-rtms/:meetingId
+    results.ts          # GET /results/:meetingUuid
+    health.ts           # GET /health
+```
+
+### Per-participant pipeline
+
+For each participant detected in the RTMS video stream:
+
+1. **Blur check** — `analyzeBlur()` + `rgbaToGrayscale()` from `@moveris/shared` reject blurry frames
+2. **Resize** — `sharp` resizes to 640x480 PNG
+3. **Collect** — `BaseFrameCollector` from `@moveris/shared` buffers frames until 10 quality frames are captured
+4. **Submit** — `LivenessClient.fastCheck(frames, { sessionId, source: "live" })` sends frames for server-side face detection and liveness analysis
+5. **Timeout** — If 10 frames aren't collected within 30 seconds, the participant is marked with `error: "insufficient_frames"`
+
+### Error handling
+
+- `LivenessApiError` from `@moveris/shared` is caught with code-specific logging (`invalid_key`, `insufficient_credits`, `rate_limit_exceeded`)
+- RTMS join failures (`onJoinConfirm` with reason != 0) mark the session as errored
+- RTMS disconnections (`onLeave`) and session stops (`onSessionUpdate`) clean up session state
+- Media connection interruptions are logged via `onMediaConnectionInterrupted`
+
+---
+
+## Deployment
+
+### Fly.io
+
+```bash
+# First time
+fly apps create zoom-rtms-plugin-staging --org moveris
+
+# Set secrets
+fly secrets set \
+  ZOOM_CLIENT_ID=... \
+  ZOOM_CLIENT_SECRET=... \
+  ZOOM_WEBHOOK_SECRET_TOKEN=... \
+  MOVERIS_API_KEY=sk-... \
+  --app zoom-rtms-plugin-staging
+
+# Deploy
+fly deploy --config fly.staging.toml
+```
+
+### Docker
+
+```bash
+docker compose up -d
+```
+
+The Dockerfile uses a multi-stage build with `node:22-slim` — builds TypeScript in a builder stage, then copies compiled JS + production dependencies into a minimal runtime image. The runtime stage installs `libstdc++6` from Debian Trixie to satisfy the `@zoom/rtms` native addon's GLIBCXX requirement.
 
 ---
 
 ## Development
 
 ```bash
-# Create virtual environment
-python3.12 -m venv .venv && source .venv/bin/activate
-
 # Install dependencies
-pip install -r requirements.txt -r requirements-dev.txt
+npm install
 
-# Run tests
-pytest tests/ -v
+# Run in dev mode (auto-reload with tsx)
+npm run dev
 
-# Lint
-ruff check src/ tests/
-ruff format --check src/ tests/
+# Build TypeScript
+npm run build
 
-# Type check
-mypy src/ --ignore-missing-imports
+# Start production server
+npm start
 ```
-
-### Project structure
-
-```
-src/
-├── config.py            # pydantic-settings Settings class
-├── main.py              # FastAPI app + lifespan + routes
-├── webhook_handler.py   # Zoom webhook signature validation + event dispatch
-├── results.py           # ResultStore ABC, InMemoryResultStore, data models
-├── rtms/
-│   ├── signaling.py     # RTMS signaling WebSocket client (Phase 3)
-│   ├── media.py         # RTMS media WebSocket client + JSON frame parser (Phase 6)
-│   └── decoder.py       # H264Decoder — asyncio FFmpeg subprocess (Phase 4)
-├── video/
-│   ├── face_detector.py # MediaPipe face detection + 224×224 PNG crop (Phase 5)
-│   └── frame_selector.py# Laplacian sharpness quality filter (Phase 5)
-├── moveris/
-│   └── client.py        # HTTP client for POST /api/v1/fast-check-crops (Phase 7)
-└── orchestrator.py      # Full pipeline coordinator (Phase 8)
-```
-
----
-
-## Implementation status
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 1 | Repository skeleton, config, CI pipeline | ✅ Done |
-| 2 | Zoom webhook handler + signature validation | ✅ Done |
-| 3 | RTMS signaling WebSocket client | 🔲 Backlog |
-| 4 | H.264 decoder (asyncio FFmpeg subprocess) | 🔲 Backlog |
-| 5 | Face detector (MediaPipe) + sharpness filter | 🔲 Backlog |
-| 6 | RTMS media WebSocket client + JSON frame parser | 🔲 Backlog |
-| 7 | Moveris HTTP client (`/fast-check-crops`) | 🔲 Backlog |
-| 8 | Session orchestrator | 🔲 Backlog |
-| 9 | Finalize FastAPI endpoints + wire orchestrator | 🔲 Backlog |
-| 10 | Docker + deployment examples | 🔲 Backlog |
-| 11 | Full documentation suite | 🔲 Backlog |
-| 12 | Complete test suite + v0.1.0 tag | 🔲 Backlog |
-
----
-
-## Documentation
-
-- [Configuration reference](docs/configuration.md)
-- [Zoom integration guide](docs/integration-guide.md)
-- [API reference](docs/api-reference.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Data privacy (GDPR, CCPA, BIPA)](docs/data-privacy.md)
 
 ---
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE). The Apache 2.0 license includes an explicit patent grant, which matters for biometric software.
+Apache 2.0 — see [LICENSE](LICENSE).
