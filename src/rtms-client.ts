@@ -31,6 +31,11 @@ export class RTMSClient {
   private onError: SessionErrorCallback;
   private onDisconnect: SessionErrorCallback;
 
+  // --- Diagnostic counters ---
+  private videoCallbackCount = 0;
+  private firstVideoCallbackTime: number | null = null;
+  private lastDiagLogTime: number | null = null;
+
   constructor(
     meetingUuid: string,
     payload: Record<string, any>,
@@ -53,17 +58,48 @@ export class RTMSClient {
     this.sdk = new rtms.Client();
 
     // H264 at 30fps HD
-    this.sdk.setVideoParams({
+    const videoParams = {
       contentType: rtms.VideoContentType.RAW_VIDEO,
       codec: rtms.VideoCodec.H264,
       resolution: rtms.VideoResolution.HD,
       dataOpt: rtms.VideoDataOption.VIDEO_SINGLE_ACTIVE_STREAM,
       fps: 30,
-    });
+    };
+    console.log(
+      `[RTMSDiag] setVideoParams — meeting=${this.meetingUuid} ` +
+      `params=${JSON.stringify(videoParams)}`,
+    );
+    this.sdk.setVideoParams(videoParams);
 
     this.sdk.onVideoData((data: Buffer, size: number, timestamp: number, metadata: Metadata) => {
       const h264Chunk = data.subarray(0, size);
       const userId = metadata.userId;
+      const now = Date.now();
+
+      this.videoCallbackCount++;
+
+      // Log first video callback with full metadata
+      if (this.firstVideoCallbackTime === null) {
+        this.firstVideoCallbackTime = now;
+        console.log(
+          `[RTMSDiag] First video callback — meeting=${this.meetingUuid} ` +
+          `userId=${userId} userName="${metadata.userName}" ` +
+          `bufferSize=${data.length} chunkSize=${size} timestamp=${timestamp} ` +
+          `metadata=${JSON.stringify(metadata)}`,
+        );
+      }
+
+      // Periodic delivery rate (every ~2 seconds)
+      if (this.lastDiagLogTime === null || now - this.lastDiagLogTime >= 2000) {
+        this.lastDiagLogTime = now;
+        const elapsedSec = (now - this.firstVideoCallbackTime) / 1000;
+        const callbacksPerSec = elapsedSec > 0 ? (this.videoCallbackCount / elapsedSec).toFixed(1) : "0";
+        console.log(
+          `[RTMSDiag] Video rate — meeting=${this.meetingUuid} ` +
+          `callbacks=${this.videoCallbackCount} (${callbacksPerSec}/s) ` +
+          `elapsed=${elapsedSec.toFixed(1)}s lastSize=${size}B userId=${userId}`,
+        );
+      }
 
       // Notify immediately on first sight of a user (before decoding)
       if (!this.seenUsers.has(userId) && userId !== 0) {

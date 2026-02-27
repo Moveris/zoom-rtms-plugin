@@ -258,7 +258,7 @@ class Session {
 
     if (!state) {
       const displayName = userName || participantId;
-      const decoder = new H264BatchDecoder();
+      const decoder = new H264BatchDecoder(`${participantId}:${displayName}`);
 
       // Periodically check if the batch decoder has accumulated enough data
       const checkInterval = setInterval(() => {
@@ -347,7 +347,12 @@ class Session {
     try {
       const { frames: pngFrames } = await state.decoder.decode();
 
-      console.log(`Batch decoded — meeting=${this.meetingUuid} participant=${participantId} frames=${pngFrames.length}`);
+      const pngSizes = pngFrames.map((p) => p.length);
+      const avgPngSize = Math.round(pngSizes.reduce((a, b) => a + b, 0) / pngSizes.length);
+      console.log(
+        `Batch decoded — meeting=${this.meetingUuid} participant=${participantId} ` +
+        `frames=${pngFrames.length} avgPngSize=${avgPngSize}B`,
+      );
 
       // Build CapturedFrame objects from the 10 consecutive PNG frames
       const capturedFrames: CapturedFrame[] = pngFrames.map((png, i) => ({
@@ -355,6 +360,12 @@ class Session {
         timestampMs: Date.now(),
         pixels: png.toString("base64"),
       }));
+
+      const totalPayloadKB = capturedFrames.reduce((sum, f) => sum + f.pixels.length, 0) / 1024;
+      console.log(
+        `[Diag] Submitting to Moveris — meeting=${this.meetingUuid} participant=${participantId} ` +
+        `frames=${capturedFrames.length} totalBase64=${totalPayloadKB.toFixed(1)}KB`,
+      );
 
       // Notify sidebar: analyzing (submitting to Moveris)
       this.onStage?.(this.meetingUuid, participantId, state.userName, "analyzing");
