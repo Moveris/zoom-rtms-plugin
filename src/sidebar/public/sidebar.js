@@ -55,23 +55,23 @@ function updateSessionBadge() {
   switch (sessionStage) {
     case "pending":
       scanStatusBadge.textContent = "Connecting...";
-      scanStatusBadge.className = "status-badge status-scanning";
+      scanStatusBadge.className = "status-badge status-scanning status-shimmer";
       break;
     case "connected":
       scanStatusBadge.textContent = "Connected";
-      scanStatusBadge.className = "status-badge status-scanning";
+      scanStatusBadge.className = "status-badge status-scanning status-shimmer";
       break;
     case "recording":
       scanStatusBadge.textContent = "Recording";
-      scanStatusBadge.className = "status-badge status-scanning";
+      scanStatusBadge.className = "status-badge status-scanning status-shimmer";
       break;
     case "analyzing":
       scanStatusBadge.textContent = "Analyzing";
-      scanStatusBadge.className = "status-badge status-scanning";
+      scanStatusBadge.className = "status-badge status-scanning status-shimmer";
       break;
     case "complete":
       scanStatusBadge.textContent = "Complete";
-      scanStatusBadge.className = "status-badge status-live";
+      scanStatusBadge.className = "status-badge status-live reveal";
       break;
     case "error":
       scanStatusBadge.textContent = "Error";
@@ -79,7 +79,7 @@ function updateSessionBadge() {
       break;
     default:
       scanStatusBadge.textContent = "Scanning";
-      scanStatusBadge.className = "status-badge status-scanning";
+      scanStatusBadge.className = "status-badge status-scanning status-shimmer";
   }
 }
 
@@ -349,12 +349,27 @@ function renderParticipants() {
       card.dataset.pid = pid;
       participantsContainer.appendChild(card);
     }
+    // Add result border glow on verdict
+    card.classList.remove("result-live", "result-fake");
+    if (data.verdict === "live") card.classList.add("result-live");
+    else if (data.verdict === "fake") card.classList.add("result-fake");
+
     card.innerHTML = renderParticipantCard(pid, data);
   });
 }
 
 function retryParticipant(pid) {
   if (ws && ws.readyState === WebSocket.OPEN) {
+    // Spin the retry button for tactile feedback
+    var card = participantsContainer.querySelector('[data-pid="' + pid + '"]');
+    if (card) {
+      var btn = card.querySelector(".btn-retry");
+      if (btn) {
+        btn.classList.add("spinning");
+        btn.addEventListener("animationend", function () { btn.classList.remove("spinning"); }, { once: true });
+      }
+    }
+
     ws.send(JSON.stringify({ type: "retry_participant", meetingUuid: meetingUuid, participantId: pid }));
     // Reset local state immediately for responsive UI
     var p = participants.get(pid) || {};
@@ -376,20 +391,20 @@ function renderParticipantCard(pid, data) {
 
   if (data.error) {
     html += '<div class="details">';
-    html += '<span class="status-badge status-error">Error</span>';
+    html += '<span class="status-badge status-error reveal">Error</span>';
     html += '<span style="font-size:12px;color:#666;">' + escapeHtml(data.error) + "</span>";
     html += "</div>";
   } else if (data.verdict) {
     var isLive = data.verdict === "live";
     html += '<div class="details">';
     html +=
-      '<span class="status-badge ' +
+      '<span class="status-badge reveal ' +
       (isLive ? "status-live" : "status-fake") +
       '">' +
       data.verdict.toUpperCase() +
       "</span>";
     html +=
-      '<span class="score ' +
+      '<span class="score reveal ' +
       (isLive ? "live" : "fake") +
       '">' +
       data.score +
@@ -400,13 +415,13 @@ function renderParticipantCard(pid, data) {
     html += '<span class="status-badge status-scanning">Decoding...</span>';
     html += '<span style="font-size:12px;color:#666;">Processing video frames</span>';
     html += "</div>";
-    html += '<div class="progress-bar"><div class="fill" style="width:100%"></div></div>';
+    html += '<div class="progress-bar indeterminate"><div class="fill"></div></div>';
   } else if (data.stage === "analyzing") {
     html += '<div class="details">';
     html += '<span class="status-badge status-scanning">Analyzing...</span>';
     html += '<span style="font-size:12px;color:#666;">Submitting to Moveris API</span>';
     html += "</div>";
-    html += '<div class="progress-bar"><div class="fill" style="width:100%"></div></div>';
+    html += '<div class="progress-bar indeterminate"><div class="fill"></div></div>';
   } else {
     // Recording — time-based progress (seconds accumulated)
     var elapsedSec = data.framesCollected || 0;

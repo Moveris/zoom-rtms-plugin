@@ -130,6 +130,7 @@ input[type="password"]:focus {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 .status-live {
@@ -145,11 +146,17 @@ input[type="password"]:focus {
 .status-scanning {
   background: #bee3f8;
   color: #2a4365;
+  animation: badgePulse 2s ease-in-out infinite;
 }
 
 .status-error {
   background: #fefcbf;
   color: #744210;
+}
+
+@keyframes badgePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 /* Participant card */
@@ -159,6 +166,27 @@ input[type="password"]:focus {
   padding: 14px;
   margin-bottom: 10px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  animation: cardSlideIn 0.35s ease-out;
+  transition: box-shadow 0.3s ease;
+}
+
+.participant-card.result-live {
+  box-shadow: 0 0 0 2px #c6f6d5, 0 2px 8px rgba(56, 161, 105, 0.15);
+}
+
+.participant-card.result-fake {
+  box-shadow: 0 0 0 2px #fed7d7, 0 2px 8px rgba(229, 62, 62, 0.15);
+}
+
+@keyframes cardSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .participant-card .card-header {
@@ -230,6 +258,57 @@ input[type="password"]:focus {
   background: #2d8cff;
   border-radius: 3px;
   transition: width 0.3s ease;
+}
+
+/* Indeterminate progress bar for decode/analyze phases */
+.progress-bar.indeterminate .fill {
+  width: 40% !important;
+  animation: indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+/* Score reveal animation */
+.participant-card .score {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.participant-card .score.reveal {
+  animation: scoreReveal 0.5s ease-out;
+}
+
+@keyframes scoreReveal {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Verdict badge reveal */
+.status-badge.reveal {
+  animation: badgeReveal 0.4s ease-out;
+}
+
+@keyframes badgeReveal {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* Info box */
@@ -329,4 +408,59 @@ input[type="password"]:focus {
 .empty-state .icon {
   font-size: 32px;
   margin-bottom: 8px;
+  animation: emptyPulse 2.5s ease-in-out infinite;
+}
+
+@keyframes emptyPulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+
+/* Shimmer effect for scanning header badge */
+.status-badge.status-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.status-badge.status-shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { left: -100%; }
+  100% { left: 200%; }
+}
+
+/* Error message slide-in */
+.error-msg.visible {
+  display: block;
+  animation: errorSlide 0.3s ease-out;
+}
+
+@keyframes errorSlide {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Retry button spin on click */
+.btn-retry.spinning {
+  animation: retrySpin 0.6s ease-in-out;
+}
+
+@keyframes retrySpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
