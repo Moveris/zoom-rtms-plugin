@@ -23,6 +23,7 @@ var changeKeyBtn = document.getElementById("change-key-btn");
 var participantsContainer = document.getElementById("participants-container");
 var noParticipants = document.getElementById("no-participants");
 var scanStatusBadge = document.getElementById("scan-status-badge");
+var excludeSelfToggle = document.getElementById("exclude-self-toggle");
 
 // --- Helpers ---
 function showSection(section) {
@@ -218,7 +219,11 @@ function connectWebSocket() {
 
   ws.onopen = function () {
     console.log("Sidebar WS connected");
-    ws.send(JSON.stringify({ type: "start_monitoring", meetingUuid: meetingUuid }));
+    var monitorMsg = { type: "start_monitoring", meetingUuid: meetingUuid };
+    if (excludeSelfToggle && excludeSelfToggle.checked) {
+      monitorMsg.excludeSelf = true;
+    }
+    ws.send(JSON.stringify(monitorMsg));
   };
 
   ws.onmessage = function (event) {

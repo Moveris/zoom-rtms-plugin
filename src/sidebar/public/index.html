@@ -40,7 +40,11 @@
     <div class="info-box">
       Ready to scan meeting participants for liveness. Click the button below to start.
     </div>
-    <button id="start-scan-btn" class="btn btn-primary">Start Liveness Scan</button>
+    <label class="toggle-row" for="exclude-self-toggle">
+      <input type="checkbox" id="exclude-self-toggle">
+      <span class="toggle-label">Exclude myself from scan</span>
+    </label>
+    <button id="start-scan-btn" class="btn btn-primary mt-12">Start Liveness Scan</button>
     <button id="change-key-btn" class="btn btn-secondary mt-12">Change API Key</button>
   </div>
 

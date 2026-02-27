@@ -124,9 +124,11 @@ export class SidebarWsServer {
           ws.send(JSON.stringify({ type: "error", message: "No API key configured. Please add your Moveris API key first." }));
           return;
         }
-        this.orchestrator.registerPendingSession(info.meetingUuid, apiKey);
+        // Host can opt out of being scanned to save tokens
+        const excludeUserId = msg.excludeSelf ? info.userId : undefined;
+        this.orchestrator.registerPendingSession(info.meetingUuid, apiKey, excludeUserId);
         this.broadcast(info.meetingUuid, { type: "session_state", state: "pending" });
-        console.log(`Sidebar requested start — meeting=${info.meetingUuid} user=${info.userId}`);
+        console.log(`Sidebar requested start — meeting=${info.meetingUuid} user=${info.userId}${excludeUserId ? " (excluding self)" : ""}`);
         break;
       }
 

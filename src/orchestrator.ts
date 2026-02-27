@@ -55,6 +55,7 @@ export type ResultCallback = (
 interface PendingSession {
   meetingUuid: string;
   apiKey?: string;
+  excludeUserId?: string;
   createdAt: Date;
 }
 
@@ -83,27 +84,28 @@ export class SessionOrchestrator {
     return this.sessions.size;
   }
 
-  registerPendingSession(meetingUuid: string, apiKey?: string): void {
+  registerPendingSession(meetingUuid: string, apiKey?: string, excludeUserId?: string): void {
     this.pendingSessions.set(meetingUuid, {
       meetingUuid,
       apiKey,
+      excludeUserId,
       createdAt: new Date(),
     });
-    console.log(`Pending session registered: meeting=${meetingUuid}`);
+    console.log(`Pending session registered: meeting=${meetingUuid}${excludeUserId ? ` excludeUser=${excludeUserId}` : ""}`);
   }
 
   hasPendingSession(meetingUuid: string): boolean {
     return this.pendingSessions.has(meetingUuid);
   }
 
-  consumePendingSession(meetingUuid: string): string | undefined {
+  consumePendingSession(meetingUuid: string): { apiKey?: string; excludeUserId?: string } | undefined {
     const pending = this.pendingSessions.get(meetingUuid);
     if (!pending) return undefined;
     this.pendingSessions.delete(meetingUuid);
-    return pending.apiKey;
+    return { apiKey: pending.apiKey, excludeUserId: pending.excludeUserId };
   }
 
-  startSession(meetingUuid: string, rtmsPayload: Record<string, any>, apiKey?: string): void {
+  startSession(meetingUuid: string, rtmsPayload: Record<string, any>, apiKey?: string, excludeUserId?: string): void {
     if (this.sessions.size >= this.config.MAX_CONCURRENT_SESSIONS) {
       throw new TooManySessions(
         `Cannot start session ${meetingUuid}: max ${this.config.MAX_CONCURRENT_SESSIONS} concurrent sessions`,
@@ -136,10 +138,11 @@ export class SessionOrchestrator {
       this.onProgress,
       this.onStage,
       this.onResult,
+      excludeUserId,
     );
     this.sessions.set(meetingUuid, session);
     session.start();
-    console.log(`Session started: meeting=${meetingUuid}`);
+    console.log(`Session started: meeting=${meetingUuid}${excludeUserId ? ` excludeUser=${excludeUserId}` : ""}`);
   }
 
   retryParticipant(meetingUuid: string, participantId: string): boolean {
@@ -189,6 +192,7 @@ class Session {
   private onProgress: ProgressCallback | null;
   private onStage: StageCallback | null;
   private onResult: ResultCallback | null;
+  private excludeUserId: string | undefined;
 
   constructor(
     meetingUuid: string,
@@ -199,6 +203,7 @@ class Session {
     onProgress: ProgressCallback | null,
     onStage: StageCallback | null,
     onResult: ResultCallback | null,
+    excludeUserId?: string,
   ) {
     this.meetingUuid = meetingUuid;
     this.resultStore = resultStore;
@@ -207,6 +212,10 @@ class Session {
     this.onProgress = onProgress;
     this.onStage = onStage;
     this.onResult = onResult;
+    this.excludeUserId = excludeUserId;
+    if (excludeUserId) {
+      console.log(`Session excluding userId=${excludeUserId} from scanning — meeting=${meetingUuid}`);
+    }
     this.rtms = new RTMSClient(
       meetingUuid,
       rtmsPayload,
@@ -221,6 +230,7 @@ class Session {
       (userId, userName) => {
         // Video data first seen for this user — show them instantly
         const participantId = String(userId);
+        if (this.excludeUserId && participantId === this.excludeUserId) return;
         const displayName = userName || participantId;
         console.log(`Participant detected — meeting=${this.meetingUuid} participant=${participantId} name=${displayName}`);
         this.onStage?.(this.meetingUuid, participantId, displayName, "recording");
@@ -286,6 +296,9 @@ class Session {
     if (userId === 0) return;
 
     const participantId = String(userId);
+
+    // Skip excluded user (host self-exclusion)
+    if (this.excludeUserId && participantId === this.excludeUserId) return;
     let state = this.participants.get(participantId);
 
     if (!state) {

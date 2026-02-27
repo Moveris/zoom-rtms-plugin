@@ -292,6 +292,33 @@ input[type="password"]:focus {
   to { transform: rotate(360deg); }
 }
 
+/* Toggle row */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  color: #4a5568;
+  margin-bottom: 0;
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #2d8cff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toggle-label {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 /* Empty state */
 .empty-state {
   text-align: center;

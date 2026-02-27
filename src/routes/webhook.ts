@@ -23,8 +23,11 @@ export function webhookRouter(
           try {
             // Check if the sidebar registered a pending session with a user-provided key
             let apiKey: string | undefined;
+            let excludeUserId: string | undefined;
             if (orchestrator.hasPendingSession(meetingUuid)) {
-              apiKey = orchestrator.consumePendingSession(meetingUuid);
+              const pending = orchestrator.consumePendingSession(meetingUuid);
+              apiKey = pending?.apiKey;
+              excludeUserId = pending?.excludeUserId;
               console.log(`Using sidebar-provided API key for meeting=${meetingUuid}`);
             } else if (!config.AUTO_START_RTMS) {
               // Sidebar-only mode: no pending session means no scan requested
@@ -32,7 +35,7 @@ export function webhookRouter(
               return;
             }
             // Pass the raw webhook payload directly — the SDK's join() expects this format.
-            orchestrator.startSession(meetingUuid, rtmsPayload, apiKey);
+            orchestrator.startSession(meetingUuid, rtmsPayload, apiKey, excludeUserId);
           } catch (err) {
             console.error(`Failed to start RTMS session: ${err}`);
           }
