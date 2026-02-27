@@ -61,14 +61,34 @@ The plugin includes a Zoom App sidebar that hosts can open during meetings:
 - **API key management** — Host enters their own Moveris API key (no server-side key required)
 - **On-demand scanning** — Host clicks "Start Scan" to trigger liveness checks at a specific moment
 - **Real-time results** — Per-participant progress bars and liveness verdicts update live via WebSocket
+- **Per-participant retry** — Rescan button on each participant card to re-run liveness analysis without restarting the full session
+- **Late joiners** — Participants who join after the scan starts are automatically picked up and scanned
 
 The sidebar uses the Zoom Apps SDK (`@zoom/appssdk`) to authenticate via encrypted Zoom app context, and communicates with the backend over JWT-secured REST and WebSocket endpoints.
 
 ---
 
+## Zoom client settings
+
+Certain Zoom video settings affect liveness detection accuracy. For best results:
+
+| Setting | Recommended | Notes |
+|---------|------------|-------|
+| **HD video** | ON | Required. Low-resolution video may cause inaccurate results. |
+| **Portrait lighting** | OFF | Synthetic lighting effects distort face geometry, causing false "fake" verdicts. |
+| **Touch up my appearance** | OFF | Skin smoothing can trigger false "fake" results. |
+| **Virtual backgrounds** | OFF | May interfere with face analysis (testing in progress). |
+| **Video filters** | OFF | Any post-processing filter may cause false positives. |
+
+**General rule:** Disable all Zoom video post-processing effects before running a liveness scan. The liveness model analyzes natural face characteristics — any synthetic modification to the video feed risks triggering a false "fake" verdict.
+
+> **Note:** Systematic one-variable-at-a-time testing is ongoing. See [MOV-1001](https://linear.app/moveris/issue/MOV-1001) for the full test matrix.
+
+---
+
 ## Known issues
 
-**H264 frame delivery from RTMS** — The Zoom RTMS SDK delivers H264 video at a low effective frame rate despite requesting 30 FPS. We have tested PNG, JPG, and H264 codecs; H264 provides the most data but still requires careful buffering to ensure 10 consecutive frames reach the Moveris API. The current approach (batch-accumulate ~4 seconds of H264 data, then decode in one FFmpeg invocation) works around streaming/pipe buffering issues but is still being refined. Contributions and ideas welcome.
+**Sidebar refresh during active scan** — If the Zoom sidebar app is refreshed while a scan is running, `startRTMS()` may fail because Zoom only allows one active RTMS session per meeting. The plugin handles this gracefully — the sidebar proceeds to the scanning view and reconnects to the active server-side session via WebSocket.
 
 ---
 
