@@ -20,36 +20,55 @@ Zoom Meeting
 |                                                           |
 |  Webhook Handler -----> RTMSClient (@zoom/rtms SDK)       |
 |  (rtms.createWebhookHandler)    |                         |
-|                            PNG video frames               |
+|                            H264 video chunks              |
 |                            per participant                 |
 |                                 |                         |
-|                          frame-processor                  |
-|                       (sharp resize 640x480               |
-|                        + blur analysis)                   |
-|                                 |                         |
-|                        BaseFrameCollector                 |
-|                      (10 quality frames)                  |
+|                        H264BatchDecoder                   |
+|                     (~4s accumulate -> ffmpeg              |
+|                      batch decode -> 640x480 PNGs)        |
 |                                 |                         |
 |                    LivenessClient.fastCheck()              |
 |                       (@moveris/shared SDK)               |
 |                                 |                         |
 |                           ResultStore                     |
+|                                 |                         |
+|          WebSocket <-- SidebarWsServer --> Sidebar UI      |
+|          (real-time progress + verdicts)                   |
 +-----------------------------------------------------------+
   |
-  |  (2) GET /results/{meeting_uuid}
+  |  GET /results/{meeting_uuid}    -- REST API
+  |  /sidebar                       -- In-meeting Zoom App
   v
 LivenessResult: verdict=live|fake, score=0-100
 ```
 
 | Step | What happens |
 |------|-------------|
-| 1 | Zoom fires `meeting.rtms_started` webhook. The plugin validates the signature using `rtms.createWebhookHandler()` and starts a session. |
-| 2 | `RTMSClient` (wrapping `@zoom/rtms` SDK `Client`) joins the RTMS stream and receives PNG video frames per participant at 10 FPS. |
-| 3 | Each frame is checked for blur using `analyzeBlur()` from `@moveris/shared`, then resized to 640x480 with `sharp`. |
-| 4 | `BaseFrameCollector` from `@moveris/shared` collects 10 quality frames per participant. |
+| 1 | Zoom fires `meeting.rtms_started` webhook. The plugin validates the signature using `rtms.createWebhookHandler()` and starts a session (or waits for sidebar-initiated start if `AUTO_START_RTMS=false`). |
+| 2 | `RTMSClient` (wrapping `@zoom/rtms` SDK `Client`) joins the RTMS stream and receives raw H264 video chunks per participant at 30 FPS HD. |
+| 3 | `H264BatchDecoder` accumulates ~4 seconds of H264 data per participant, then decodes the batch in a single FFmpeg invocation to raw RGB frames. |
+| 4 | 10 consecutive frames are selected from the middle of the decoded batch, converted to 640x480 PNGs via `sharp`. |
 | 5 | Frames are submitted to `LivenessClient.fastCheck()` from `@moveris/shared` with `source: "live"`. |
 | 6 | Moveris returns a verdict (`live` / `fake`), score (0-100), and confidence. |
-| 7 | Results are stored and available at `GET /results/{meeting_uuid}`. |
+| 7 | Results are stored and pushed to the in-meeting sidebar via WebSocket, and available at `GET /results/{meeting_uuid}`. |
+
+---
+
+## In-meeting sidebar
+
+The plugin includes a Zoom App sidebar that hosts can open during meetings:
+
+- **API key management** — Host enters their own Moveris API key (no server-side key required)
+- **On-demand scanning** — Host clicks "Start Scan" to trigger liveness checks at a specific moment
+- **Real-time results** — Per-participant progress bars and liveness verdicts update live via WebSocket
+
+The sidebar uses the Zoom Apps SDK (`@zoom/appssdk`) to authenticate via encrypted Zoom app context, and communicates with the backend over JWT-secured REST and WebSocket endpoints.
+
+---
+
+## Known issues
+
+**H264 frame delivery from RTMS** — The Zoom RTMS SDK delivers H264 video at a low effective frame rate despite requesting 30 FPS. We have tested PNG, JPG, and H264 codecs; H264 provides the most data but still requires careful buffering to ensure 10 consecutive frames reach the Moveris API. The current approach (batch-accumulate ~4 seconds of H264 data, then decode in one FFmpeg invocation) works around streaming/pipe buffering issues but is still being refined. Contributions and ideas welcome.
 
 ---
 
@@ -58,8 +77,9 @@ LivenessResult: verdict=live|fake, score=0-100
 ### Prerequisites
 
 - Zoom account (Business/Education/Enterprise) with RTMS enabled
-- [Moveris API key](https://documentation.moveris.com/)
+- [Moveris API key](https://documentation.moveris.com/) (optional if users provide their own via sidebar)
 - Node.js >= 20.3.0 (or Docker)
+- FFmpeg (for H264 decoding)
 
 ### 1. Clone and configure
 
@@ -75,6 +95,7 @@ Edit `.env`:
 ZOOM_CLIENT_ID=your_zoom_client_id
 ZOOM_CLIENT_SECRET=your_zoom_client_secret
 ZOOM_WEBHOOK_SECRET_TOKEN=your_webhook_verification_token
+# Optional — not needed if users provide their own key via the sidebar
 MOVERIS_API_KEY=sk-your-moveris-api-key
 ```
 
@@ -112,7 +133,16 @@ In [Zoom Marketplace](https://marketplace.zoom.us) -> your General App -> **Feat
 
 Click **Validate** — the plugin responds to URL validation challenges automatically via the `@zoom/rtms` SDK webhook handler.
 
-### 5. Trigger RTMS for a live meeting (dev only)
+### 5. Configure Zoom App sidebar (optional)
+
+In Zoom Marketplace -> your General App -> **Feature** -> **Surfaces**:
+
+- Add "In-Meeting" sidebar
+- Home URL: `https://your-ngrok-url/sidebar`
+- Add scope: `zoomapp:inmeeting`
+- Re-authorize OAuth after scope changes
+
+### 6. Trigger RTMS for a live meeting (dev only)
 
 Once the Zoom OAuth flow is completed (visit the app's install URL), you can trigger RTMS for an active meeting:
 
@@ -120,7 +150,7 @@ Once the Zoom OAuth flow is completed (visit the app's install URL), you can tri
 curl -X POST http://localhost:8080/dev/start-rtms/{meetingId}
 ```
 
-### 6. Check results
+### 7. Check results
 
 After ~5 seconds of video per participant:
 
@@ -163,6 +193,11 @@ curl http://localhost:8080/results/{meeting_uuid}
 | `GET` | `/health` | Health check — returns `{"status":"ok","version":"0.1.0","active_sessions":N,"zoom_token":"present|missing"}` |
 | `GET` | `/oauth/callback` | Zoom OAuth callback — exchanges authorization code for access token. |
 | `POST` | `/dev/start-rtms/{meetingId}` | Dev-only — triggers RTMS for an active meeting via the Zoom REST API. Requires a valid OAuth token. |
+| `GET` | `/sidebar` | Serves the in-meeting Zoom App sidebar UI (HTML/CSS/JS). |
+| `POST` | `/api/sidebar/auth` | Decrypts Zoom app context and returns a signed JWT for sidebar authentication. |
+| `POST` | `/api/sidebar/api-key` | Stores a Moveris API key for the authenticated Zoom account (JWT required). |
+| `GET` | `/api/sidebar/api-key/status` | Checks if a Moveris API key is configured for the authenticated account. |
+| `WS` | `/ws/sidebar?token=JWT` | WebSocket endpoint for real-time sidebar updates (progress, verdicts, session state). |
 
 ---
 
@@ -175,8 +210,10 @@ All settings via environment variables (or `.env` file):
 | `ZOOM_CLIENT_ID` | string | **required** | Zoom General App client ID |
 | `ZOOM_CLIENT_SECRET` | string | **required** | Zoom General App client secret |
 | `ZOOM_WEBHOOK_SECRET_TOKEN` | string | **required** | Webhook signature validation token (from Zoom Marketplace app settings) |
-| `MOVERIS_API_KEY` | string | **required** | Moveris API key (`sk-...`) |
-| `FRAME_SAMPLE_RATE` | int | `10` | Video FPS requested from RTMS. Moveris recommends 10 FPS for natural signal capture. |
+| `MOVERIS_API_KEY` | string | — | Moveris API key (`sk-...`). Optional if users provide their own via the sidebar. |
+| `AUTO_START_RTMS` | bool | `true` | When `true`, RTMS sessions start automatically on webhook. When `false`, requires sidebar-initiated scan. |
+| `JWT_SECRET` | string | auto-generated | Secret for signing sidebar auth JWTs. Auto-generated per process if not set. |
+| `FRAME_SAMPLE_RATE` | int | `5` | Internal frame sample rate parameter. |
 | `LIVENESS_THRESHOLD` | int | `65` | Minimum Moveris score to consider a participant "live" |
 | `MAX_CONCURRENT_SESSIONS` | int | `50` | Max simultaneous RTMS sessions. `startSession()` throws `TooManySessions` above this limit. |
 | `LOG_LEVEL` | string | `info` | Log level — also configures the `@zoom/rtms` SDK logger. Values: `error`, `warn`, `info`, `debug`, `trace` |
@@ -188,24 +225,28 @@ All settings via environment variables (or `.env` file):
 
 ### SDKs used
 
-This plugin is built on two official SDKs — no custom protocol handling, no manual HMAC validation, no face detection pipeline:
+This plugin is built on official SDKs — no custom protocol handling, no manual HMAC validation:
 
 | SDK | Purpose |
 |-----|---------|
 | [`@zoom/rtms`](https://www.npmjs.com/package/@zoom/rtms) | RTMS stream connection, webhook handling, signature generation, session events |
-| [`@moveris/shared`](https://documentation.moveris.com/sdk/overview/) | Liveness API client, frame collection, blur analysis, session ID generation |
+| [`@zoom/appssdk`](https://www.npmjs.com/package/@zoom/appssdk) | Zoom Apps SDK for in-meeting sidebar context and authentication |
+| [`@moveris/shared`](https://documentation.moveris.com/sdk/overview/) | Liveness API client, session ID generation, API key validation |
 
 ### Project structure
 
 ```
 src/
-  index.ts              # Entrypoint: config, SDK logger, server, graceful shutdown
+  index.ts              # Entrypoint: config, SDK logger, server, WS server, graceful shutdown
   config.ts             # Zod-validated environment config
-  app.ts                # Express app factory, mounts all routes
+  app.ts                # Express app factory, OWASP security headers, mounts all routes
   types.ts              # ParticipantResult, SessionStatus interfaces
-  orchestrator.ts       # SessionOrchestrator + per-participant frame pipeline
-  rtms-client.ts        # Thin wrapper around @zoom/rtms Client
-  frame-processor.ts    # sharp resize + @moveris/shared blur analysis
+  orchestrator.ts       # SessionOrchestrator + per-participant H264 batch pipeline
+  rtms-client.ts        # Thin wrapper around @zoom/rtms Client (H264 raw video)
+  h264-batch-decoder.ts # Accumulates H264 chunks -> batch FFmpeg decode -> 10 consecutive PNGs
+  api-key-store.ts      # In-memory per-account Moveris API key storage
+  zoom-context.ts       # Decrypts Zoom app context (AES-256-GCM)
+  sidebar-ws.ts         # JWT-authenticated WebSocket server for sidebar real-time updates
   results.ts            # ResultStore interface + InMemoryResultStore
   routes/
     webhook.ts          # POST /zoom/webhook (rtms.createWebhookHandler)
@@ -213,17 +254,34 @@ src/
     dev.ts              # POST /dev/start-rtms/:meetingId
     results.ts          # GET /results/:meetingUuid
     health.ts           # GET /health
+    sidebar.ts          # Sidebar routes: auth, API key, static files
+  sidebar/
+    public/
+      index.html        # In-meeting sidebar UI
+      sidebar.css       # Sidebar styles
+      sidebar.js        # Sidebar logic (Zoom Apps SDK + WebSocket client)
+rollup.config.js        # Bundles sidebar JS for browser (IIFE + minified)
 ```
 
 ### Per-participant pipeline
 
 For each participant detected in the RTMS video stream:
 
-1. **Blur check** — `analyzeBlur()` + `rgbaToGrayscale()` from `@moveris/shared` reject blurry frames
-2. **Resize** — `sharp` resizes to 640x480 PNG
-3. **Collect** — `BaseFrameCollector` from `@moveris/shared` buffers frames until 10 quality frames are captured
-4. **Submit** — `LivenessClient.fastCheck(frames, { sessionId, source: "live" })` sends frames for server-side face detection and liveness analysis
-5. **Timeout** — If 10 frames aren't collected within 30 seconds, the participant is marked with `error: "insufficient_frames"`
+1. **Accumulate** — Raw H264 NAL units are fed into `H264BatchDecoder` for ~4 seconds
+2. **Batch decode** — All accumulated H264 data is written to a temp file and decoded in a single FFmpeg invocation to raw RGB frames
+3. **Select** — 10 consecutive frames are selected from the middle of the decoded batch (Moveris requires temporal continuity)
+4. **Convert** — Selected frames are resized to 640x480 and encoded as PNG via `sharp`
+5. **Submit** — `LivenessClient.fastCheck(frames, { sessionId, source: "live" })` sends frames for server-side face detection and liveness analysis
+6. **Timeout** — If H264 data isn't accumulated within 30 seconds or no data arrives for 5 seconds, the participant is marked with an error
+
+### Sidebar real-time flow
+
+1. **Auth** — Sidebar loads Zoom Apps SDK, calls `getAppContext()`, POSTs encrypted context to `/api/sidebar/auth`, receives JWT
+2. **Connect** — Sidebar opens WebSocket to `/ws/sidebar?token=JWT`, joins the meeting room
+3. **API key** — Host enters Moveris API key, POSTs to `/api/sidebar/api-key`
+4. **Start scan** — Host clicks "Start Scan", sidebar sends `start_monitoring` over WebSocket
+5. **Progress** — Backend pushes `scan_progress` (seconds accumulated), `stage` updates (connected/recording/decoding/analyzing), and `participant_result` verdicts
+6. **Display** — Sidebar UI updates in real-time with progress bars and verdict badges
 
 ### Error handling
 
@@ -231,6 +289,7 @@ For each participant detected in the RTMS video stream:
 - RTMS join failures (`onJoinConfirm` with reason != 0) mark the session as errored
 - RTMS disconnections (`onLeave`) and session stops (`onSessionUpdate`) clean up session state
 - Media connection interruptions are logged via `onMediaConnectionInterrupted`
+- H264 decode failures and accumulation/inactivity timeouts produce per-participant error results
 
 ---
 
@@ -260,7 +319,7 @@ fly deploy --config fly.staging.toml
 docker compose up -d
 ```
 
-The Dockerfile uses a multi-stage build with `node:22-slim` — builds TypeScript in a builder stage, then copies compiled JS + production dependencies into a minimal runtime image. The runtime stage installs `libstdc++6` from Debian Trixie to satisfy the `@zoom/rtms` native addon's GLIBCXX requirement.
+The Dockerfile uses a multi-stage build with `node:22-slim` — builds TypeScript and bundles sidebar JS in a builder stage, then copies compiled JS + production dependencies into a minimal runtime image. The runtime stage installs `libstdc++6` from Debian Trixie (for `@zoom/rtms` native addon), `ffmpeg` (for H264 batch decoding), and `ca-certificates`.
 
 ---
 
@@ -273,7 +332,7 @@ npm install
 # Run in dev mode (auto-reload with tsx)
 npm run dev
 
-# Build TypeScript
+# Build TypeScript + bundle sidebar JS
 npm run build
 
 # Start production server
