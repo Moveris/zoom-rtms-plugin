@@ -235,7 +235,7 @@ function runFfmpeg(inputPath: string, label = "unknown"): Promise<Buffer[]> {
       "-loglevel", "info",
       "-f", "h264",
       "-i", inputPath,
-      "-vf", `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}`,
+      "-vf", `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black`,
       "-f", "rawvideo",
       "-pix_fmt", "rgb24",
       "pipe:1",

@@ -342,9 +342,26 @@ function renderParticipants() {
   });
 }
 
+function retryParticipant(pid) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "retry_participant", meetingUuid: meetingUuid, participantId: pid }));
+    // Reset local state immediately for responsive UI
+    var p = participants.get(pid) || {};
+    p.verdict = null;
+    p.score = null;
+    p.error = null;
+    p.stage = "recording";
+    p.framesCollected = 0;
+    p.framesNeeded = 4;
+    participants.set(pid, p);
+    renderParticipants();
+  }
+}
+
 function renderParticipantCard(pid, data) {
   var displayName = data.userName ? escapeHtml(data.userName) : "Participant " + escapeHtml(pid);
-  var html = '<div class="name">' + displayName + "</div>";
+  var retryBtn = '<button class="btn-retry" onclick="retryParticipant(\'' + escapeHtml(pid) + '\')" title="Rescan">\u21BB</button>';
+  var html = '<div class="card-header"><div class="name">' + displayName + "</div>" + retryBtn + "</div>";
 
   if (data.error) {
     html += '<div class="details">';

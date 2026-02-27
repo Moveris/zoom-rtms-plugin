@@ -136,6 +136,18 @@ export class SidebarWsServer {
         console.log(`Sidebar requested stop — meeting=${info.meetingUuid}`);
         break;
 
+      case "retry_participant": {
+        const participantId = msg.participantId as string;
+        if (!participantId) break;
+        const ok = this.orchestrator.retryParticipant(info.meetingUuid, participantId);
+        if (ok) {
+          console.log(`Sidebar requested retry — meeting=${info.meetingUuid} participant=${participantId}`);
+        } else {
+          ws.send(JSON.stringify({ type: "error", message: "Cannot retry — no active session for this meeting." }));
+        }
+        break;
+      }
+
       default:
         break;
     }

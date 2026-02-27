@@ -142,6 +142,12 @@ export class SessionOrchestrator {
     console.log(`Session started: meeting=${meetingUuid}`);
   }
 
+  retryParticipant(meetingUuid: string, participantId: string): boolean {
+    const session = this.sessions.get(meetingUuid);
+    if (!session) return false;
+    return session.retryParticipant(participantId);
+  }
+
   stopSession(meetingUuid: string): void {
     const session = this.sessions.get(meetingUuid);
     if (!session) return;
@@ -232,6 +238,32 @@ class Session {
 
   start(): void {
     this.rtms.start();
+  }
+
+  /**
+   * Reset a participant so their next H264 chunk triggers a fresh batch collection.
+   * Returns true if the participant was found and reset.
+   */
+  retryParticipant(participantId: string): boolean {
+    const state = this.participants.get(participantId);
+    if (!state) return false;
+
+    // Clean up existing timers and decoder
+    clearInterval(state.checkInterval);
+    clearTimeout(state.timeout);
+    if (!state.done) {
+      state.decoder.cancel();
+    }
+
+    // Remove so the next H264 chunk creates a fresh batch collector
+    this.participants.delete(participantId);
+    console.log(`Retry requested — meeting=${this.meetingUuid} participant=${participantId} name=${state.userName}`);
+
+    // Notify sidebar that we're back to recording
+    this.onStage?.(this.meetingUuid, participantId, state.userName, "recording");
+    this.onProgress?.(this.meetingUuid, participantId, state.userName, 0, 4);
+
+    return true;
   }
 
   close(): void {
