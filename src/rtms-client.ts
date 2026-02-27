@@ -1,40 +1,50 @@
 import rtms from "@zoom/rtms";
 import type { Metadata, SessionInfo } from "@zoom/rtms";
-import type { Config } from "./config.js";
 
-export type FrameCallback = (
-  data: Buffer,
+/**
+ * Fires for each raw H264 chunk received from a participant.
+ * The chunk has NOT been decoded — it's a raw H264 NAL unit.
+ */
+export type H264ChunkCallback = (
+  h264Data: Buffer,
   userId: number,
   userName: string,
   timestampMs: number,
 ) => void;
 
+/** Fires when the RTMS SDK successfully joins a meeting. */
+export type JoinCallback = () => void;
+
+/** Fires as soon as video data arrives for a user — before decoding. */
+export type ParticipantSeenCallback = (userId: number, userName: string) => void;
+
 export type SessionErrorCallback = (reason: number) => void;
 
 export class RTMSClient {
   private sdk: InstanceType<typeof rtms.Client> | null = null;
-  private config: Config;
+  private seenUsers = new Set<number>();
   private meetingUuid: string;
-  private rtmsStreamId: string;
-  private serverUrls: string;
-  private onFrame: FrameCallback;
+  private payload: Record<string, any>;
+  private onH264Chunk: H264ChunkCallback;
+  private onJoin: JoinCallback;
+  private onParticipantSeen: ParticipantSeenCallback;
   private onError: SessionErrorCallback;
   private onDisconnect: SessionErrorCallback;
 
   constructor(
-    config: Config,
     meetingUuid: string,
-    rtmsStreamId: string,
-    serverUrls: string,
-    onFrame: FrameCallback,
+    payload: Record<string, any>,
+    onH264Chunk: H264ChunkCallback,
+    onJoin: JoinCallback,
+    onParticipantSeen: ParticipantSeenCallback,
     onError: SessionErrorCallback,
     onDisconnect: SessionErrorCallback,
   ) {
-    this.config = config;
     this.meetingUuid = meetingUuid;
-    this.rtmsStreamId = rtmsStreamId;
-    this.serverUrls = serverUrls;
-    this.onFrame = onFrame;
+    this.payload = payload;
+    this.onH264Chunk = onH264Chunk;
+    this.onJoin = onJoin;
+    this.onParticipantSeen = onParticipantSeen;
     this.onError = onError;
     this.onDisconnect = onDisconnect;
   }
@@ -42,14 +52,33 @@ export class RTMSClient {
   start(): void {
     this.sdk = new rtms.Client();
 
-    // 1. Register callbacks first (per SDK quickstart recommended order)
+    // H264 at 30fps HD
+    this.sdk.setVideoParams({
+      contentType: rtms.VideoContentType.RAW_VIDEO,
+      codec: rtms.VideoCodec.H264,
+      resolution: rtms.VideoResolution.HD,
+      dataOpt: rtms.VideoDataOption.VIDEO_SINGLE_ACTIVE_STREAM,
+      fps: 30,
+    });
+
     this.sdk.onVideoData((data: Buffer, size: number, timestamp: number, metadata: Metadata) => {
-      this.onFrame(data.subarray(0, size), metadata.userId, metadata.userName, timestamp);
+      const h264Chunk = data.subarray(0, size);
+      const userId = metadata.userId;
+
+      // Notify immediately on first sight of a user (before decoding)
+      if (!this.seenUsers.has(userId) && userId !== 0) {
+        this.seenUsers.add(userId);
+        this.onParticipantSeen(userId, metadata.userName);
+      }
+
+      // Pass raw H264 chunk directly — no decoding at this layer
+      this.onH264Chunk(h264Chunk, userId, metadata.userName, timestamp);
     });
 
     this.sdk.onJoinConfirm((reason: number) => {
       if (reason === 0) {
         console.log(`RTMS joined — meeting=${this.meetingUuid}`);
+        this.onJoin();
       } else {
         console.error(`RTMS join failed — meeting=${this.meetingUuid} reason=${reason}`);
         this.onError(reason);
@@ -76,25 +105,7 @@ export class RTMSClient {
       console.warn(`RTMS media connection interrupted — meeting=${this.meetingUuid} timestamp=${timestamp}`);
     });
 
-    // 2. Configure media parameters
-    const paramsOk = this.sdk.setVideoParams({
-      codec: rtms.VideoCodec.PNG,
-      resolution: rtms.VideoResolution.HD,
-      dataOpt: rtms.VideoDataOption.VIDEO_SINGLE_ACTIVE_STREAM,
-      fps: this.config.FRAME_SAMPLE_RATE,
-    });
-    if (!paramsOk) {
-      console.error(`setVideoParams failed — meeting=${this.meetingUuid}`);
-      this.onError(-1);
-      return;
-    }
-
-    // 3. Join — SDK reads ZM_RTMS_CLIENT / ZM_RTMS_SECRET from env for signature generation.
-    const joinOk = this.sdk.join({
-      meeting_uuid: this.meetingUuid,
-      rtms_stream_id: this.rtmsStreamId,
-      server_urls: this.serverUrls,
-    });
+    const joinOk = this.sdk.join(this.payload as any);
     if (!joinOk) {
       console.error(`join() returned false — meeting=${this.meetingUuid}`);
       this.onError(-1);
@@ -105,6 +116,8 @@ export class RTMSClient {
   }
 
   close(): void {
+    this.seenUsers.clear();
+
     if (this.sdk) {
       this.sdk.leave();
       this.sdk = null;

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Moveris Liveness</title>
+  <link rel="stylesheet" href="/sidebar/sidebar.css">
+</head>
+<body>
+  <div class="header">
+    <h1>Moveris Liveness</h1>
+    <p>Real-time deepfake detection</p>
+  </div>
+
+  <div id="error-msg" class="error-msg"></div>
+
+  <!-- Section 1: Loading / initializing -->
+  <div id="section-loading" class="section active">
+    <div class="empty-state">
+      <div class="icon">...</div>
+      <p>Connecting to Zoom...</p>
+    </div>
+  </div>
+
+  <!-- Section 2: API Key setup -->
+  <div id="section-setup" class="section">
+    <div class="info-box">
+      Enter your Moveris API key to enable liveness detection.
+      <a href="https://documentation.moveris.com/" target="_blank" rel="noopener">Get an API key</a>
+    </div>
+    <form id="api-key-form">
+      <label for="api-key-input">API Key</label>
+      <input type="password" id="api-key-input" placeholder="sk-..." autocomplete="off">
+      <button type="submit" class="btn btn-primary mt-12" id="save-key-btn">Save API Key</button>
+    </form>
+  </div>
+
+  <!-- Section 3: Ready to scan -->
+  <div id="section-ready" class="section">
+    <div class="info-box">
+      Ready to scan meeting participants for liveness. Click the button below to start.
+    </div>
+    <button id="start-scan-btn" class="btn btn-primary">Start Liveness Scan</button>
+    <button id="change-key-btn" class="btn btn-secondary mt-12">Change API Key</button>
+  </div>
+
+  <!-- Section 4: Scanning in progress / results -->
+  <div id="section-scanning" class="section">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <span class="status-badge status-scanning" id="scan-status-badge">Scanning</span>
+      <button id="stop-scan-btn" class="btn btn-danger" style="width:auto; padding:6px 16px; font-size:12px;">Stop</button>
+    </div>
+    <div id="participants-container">
+      <div class="empty-state" id="no-participants">
+        <div class="icon">...</div>
+        <p>Waiting for video participants...</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="/sidebar/bundle.js"></script>
+</body>
+</html>

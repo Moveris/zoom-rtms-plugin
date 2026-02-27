@@ -2,18 +2,33 @@ import express from "express";
 import type { Config } from "./config.js";
 import type { SessionOrchestrator } from "./orchestrator.js";
 import type { ResultStore } from "./results.js";
+import type { ApiKeyStore } from "./api-key-store.js";
 import { devRouter } from "./routes/dev.js";
 import { healthRouter } from "./routes/health.js";
 import { oauthRouter } from "./routes/oauth.js";
 import { resultsRouter } from "./routes/results.js";
 import { webhookRouter } from "./routes/webhook.js";
+import { sidebarRouter } from "./routes/sidebar.js";
 
 export function createApp(
   config: Config,
   orchestrator: SessionOrchestrator,
   resultStore: ResultStore,
+  apiKeyStore: ApiKeyStore,
 ): express.Express {
   const app = express();
+
+  // OWASP security headers required by Zoom Marketplace Home URL validation.
+  app.use((_req, res, next) => {
+    res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self'; connect-src 'self' wss: ws:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors https://*.zoom.us",
+    );
+    next();
+  });
 
   // JSON parsing for non-webhook routes.
   // The webhook route uses rtms.createWebhookHandler() which handles its own body parsing.
@@ -25,11 +40,12 @@ export function createApp(
     }
   });
 
-  app.use(webhookRouter(orchestrator));
+  app.use(webhookRouter(config, orchestrator));
   app.use(oauthRouter(config));
   app.use(devRouter(config));
   app.use(resultsRouter(resultStore));
   app.use(healthRouter(orchestrator));
+  app.use(sidebarRouter(config, apiKeyStore));
 
   return app;
 }

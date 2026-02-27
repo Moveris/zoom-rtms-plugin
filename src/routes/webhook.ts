@@ -1,8 +1,12 @@
 import { Router } from "express";
 import rtms from "@zoom/rtms";
+import type { Config } from "../config.js";
 import type { SessionOrchestrator } from "../orchestrator.js";
 
-export function webhookRouter(orchestrator: SessionOrchestrator): Router {
+export function webhookRouter(
+  config: Config,
+  orchestrator: SessionOrchestrator,
+): Router {
   const router = Router();
 
   // Use the SDK's built-in webhook handler for URL validation + signature verification.
@@ -12,20 +16,28 @@ export function webhookRouter(orchestrator: SessionOrchestrator): Router {
       const event = payload.event as string;
 
       if (event === "meeting.rtms_started") {
-        const meetingUuid = payload.payload?.meeting_uuid as string;
-        const rtmsStreamId = payload.payload?.rtms_stream_id as string;
-        const serverUrls = payload.payload?.server_urls as string;
+        const rtmsPayload = payload.payload as Record<string, any> | undefined;
+        const meetingUuid = rtmsPayload?.meeting_uuid as string;
 
-        if (meetingUuid && rtmsStreamId && serverUrls) {
+        if (meetingUuid && rtmsPayload) {
           try {
-            orchestrator.startSession(meetingUuid, rtmsStreamId, serverUrls);
+            // Check if the sidebar registered a pending session with a user-provided key
+            let apiKey: string | undefined;
+            if (orchestrator.hasPendingSession(meetingUuid)) {
+              apiKey = orchestrator.consumePendingSession(meetingUuid);
+              console.log(`Using sidebar-provided API key for meeting=${meetingUuid}`);
+            } else if (!config.AUTO_START_RTMS) {
+              // Sidebar-only mode: no pending session means no scan requested
+              console.log(`No pending session and AUTO_START_RTMS=false — ignoring meeting=${meetingUuid}`);
+              return;
+            }
+            // Pass the raw webhook payload directly — the SDK's join() expects this format.
+            orchestrator.startSession(meetingUuid, rtmsPayload, apiKey);
           } catch (err) {
             console.error(`Failed to start RTMS session: ${err}`);
           }
         } else {
-          console.error(
-            `Missing RTMS fields: meeting_uuid=${meetingUuid}, stream_id=${rtmsStreamId}, server_urls=${!!serverUrls}`,
-          );
+          console.error(`Missing RTMS payload or meeting_uuid in webhook`);
         }
       }
 
