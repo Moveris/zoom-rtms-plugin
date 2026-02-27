@@ -172,7 +172,13 @@ startScanBtn.addEventListener("click", async function () {
     // Stop any existing RTMS session first (may fail if none active — that's fine)
     try { await zoomSdk.stopRTMS(); } catch (_) { /* ignore */ }
 
-    await zoomSdk.startRTMS();
+    try {
+      await zoomSdk.startRTMS();
+    } catch (rtmsErr) {
+      // RTMS may already be running (e.g., sidebar was refreshed).
+      // Continue to scanning view — the server session is likely still active.
+      console.warn("startRTMS failed (may already be active):", rtmsErr);
+    }
 
     participants.clear();
     sessionStage = "pending";
