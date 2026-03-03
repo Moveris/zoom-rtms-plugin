@@ -24,6 +24,8 @@ var participantsContainer = document.getElementById("participants-container");
 var noParticipants = document.getElementById("no-participants");
 var scanStatusBadge = document.getElementById("scan-status-badge");
 var excludeSelfToggle = document.getElementById("exclude-self-toggle");
+var rescanSelect = document.getElementById("rescan-select");
+var scanAllBtn = document.getElementById("scan-all-btn");
 
 // --- Helpers ---
 function showSection(section) {
@@ -69,6 +71,10 @@ function updateSessionBadge() {
       scanStatusBadge.textContent = "Analyzing";
       scanStatusBadge.className = "status-badge status-scanning status-shimmer";
       break;
+    case "monitoring":
+      scanStatusBadge.textContent = "Monitoring";
+      scanStatusBadge.className = "status-badge status-monitoring status-shimmer";
+      break;
     case "complete":
       scanStatusBadge.textContent = "Complete";
       scanStatusBadge.className = "status-badge status-live reveal";
@@ -80,6 +86,12 @@ function updateSessionBadge() {
     default:
       scanStatusBadge.textContent = "Scanning";
       scanStatusBadge.className = "status-badge status-scanning status-shimmer";
+  }
+
+  // Show "Scan All" button only when monitoring or when all initial scans are done
+  if (scanAllBtn) {
+    var showScanAll = sessionStage === "monitoring" || sessionStage === "complete";
+    scanAllBtn.style.display = showScanAll ? "inline-block" : "none";
   }
 }
 
@@ -209,6 +221,34 @@ stopScanBtn.addEventListener("click", async function () {
   }
 });
 
+// --- Scan All ---
+if (scanAllBtn) {
+  scanAllBtn.addEventListener("click", function () {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    var count = 0;
+    participants.forEach(function (data, pid) {
+      if (data.stage === "done") {
+        ws.send(JSON.stringify({ type: "retry_participant", meetingUuid: meetingUuid, participantId: pid }));
+        // Reset local state for responsive UI
+        data.verdict = null;
+        data.score = null;
+        data.error = null;
+        data.stage = "recording";
+        data.framesCollected = 0;
+        data.framesNeeded = 4;
+        data.verdictChanged = false;
+        participants.set(pid, data);
+        count++;
+      }
+    });
+    if (count > 0) {
+      sessionStage = "recording";
+      updateSessionBadge();
+      renderParticipants();
+    }
+  });
+}
+
 // --- WebSocket ---
 function connectWebSocket() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
@@ -222,6 +262,12 @@ function connectWebSocket() {
     var monitorMsg = { type: "start_monitoring", meetingUuid: meetingUuid };
     if (excludeSelfToggle && excludeSelfToggle.checked) {
       monitorMsg.excludeSelf = true;
+    }
+    if (rescanSelect) {
+      var interval = parseInt(rescanSelect.value, 10);
+      if (interval > 0) {
+        monitorMsg.rescanInterval = interval;
+      }
     }
     ws.send(JSON.stringify(monitorMsg));
   };
@@ -289,11 +335,22 @@ function handleWsMessage(msg) {
     }
     case "participant_result": {
       var pr = participants.get(msg.participantId) || {};
+      // Detect if this is a re-scan (participant already had a verdict)
+      var hadPreviousVerdict = pr.verdict != null;
+      var previousVerdict = pr.verdict;
       pr.verdict = msg.verdict;
       pr.score = msg.score;
       pr.confidence = msg.confidence;
       pr.error = msg.error;
       pr.stage = "done";
+      pr.lastCheckedAt = Date.now();
+      pr.scanCount = msg.scanCount || (pr.scanCount || 0) + 1;
+      // Flag verdict change for flash animation
+      if (hadPreviousVerdict && previousVerdict !== msg.verdict) {
+        pr.verdictChanged = true;
+      } else {
+        pr.verdictChanged = false;
+      }
       participants.set(msg.participantId, pr);
       renderParticipants();
 
@@ -303,7 +360,9 @@ function handleWsMessage(msg) {
         if (pd.stage !== "done") allDone = false;
       });
       if (allDone && participants.size > 0) {
-        sessionStage = "complete";
+        // If rescan is enabled, show "Monitoring" instead of "Complete"
+        var rescanEnabled = rescanSelect && parseInt(rescanSelect.value, 10) > 0;
+        sessionStage = rescanEnabled ? "monitoring" : "complete";
         updateSessionBadge();
       }
       break;
@@ -350,9 +409,14 @@ function renderParticipants() {
       participantsContainer.appendChild(card);
     }
     // Add result border glow on verdict
-    card.classList.remove("result-live", "result-fake");
+    card.classList.remove("result-live", "result-fake", "card-alert");
     if (data.verdict === "live") card.classList.add("result-live");
     else if (data.verdict === "fake") card.classList.add("result-fake");
+    // Flash animation when verdict changes (e.g., live → fake)
+    if (data.verdictChanged) {
+      card.classList.add("card-alert");
+      card.addEventListener("animationend", function () { card.classList.remove("card-alert"); }, { once: true });
+    }
 
     card.innerHTML = renderParticipantCard(pid, data);
   });
@@ -387,7 +451,8 @@ function retryParticipant(pid) {
 function renderParticipantCard(pid, data) {
   var displayName = data.userName ? escapeHtml(data.userName) : "Participant " + escapeHtml(pid);
   var retryBtn = '<button class="btn-retry" onclick="retryParticipant(\'' + escapeHtml(pid) + '\')" title="Rescan">\u21BB</button>';
-  var html = '<div class="card-header"><div class="name">' + displayName + "</div>" + retryBtn + "</div>";
+  var scanCountBadge = data.scanCount && data.scanCount > 1 ? '<span class="scan-count">x' + data.scanCount + '</span>' : '';
+  var html = '<div class="card-header"><div class="name">' + displayName + scanCountBadge + "</div>" + retryBtn + "</div>";
 
   if (data.error) {
     html += '<div class="details">';
@@ -410,6 +475,11 @@ function renderParticipantCard(pid, data) {
       data.score +
       "</span>";
     html += "</div>";
+    // Show "last checked" timestamp for re-scans
+    if (data.lastCheckedAt && data.scanCount > 1) {
+      var ago = formatTimeAgo(data.lastCheckedAt);
+      html += '<div class="last-checked">Checked ' + ago + '</div>';
+    }
   } else if (data.stage === "decoding") {
     html += '<div class="details">';
     html += '<span class="status-badge status-scanning">Decoding...</span>';
@@ -437,6 +507,15 @@ function renderParticipantCard(pid, data) {
   }
 
   return html;
+}
+
+function formatTimeAgo(timestamp) {
+  var seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return "just now";
+  var minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes + "m ago";
+  var hours = Math.floor(minutes / 60);
+  return hours + "h ago";
 }
 
 function escapeHtml(str) {

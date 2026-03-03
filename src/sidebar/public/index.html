@@ -44,6 +44,15 @@
       <input type="checkbox" id="exclude-self-toggle">
       <span class="toggle-label">Exclude myself from scan</span>
     </label>
+    <div class="select-row">
+      <span class="select-label">Re-scan every</span>
+      <select id="rescan-select">
+        <option value="0">Off</option>
+        <option value="60000">1 min</option>
+        <option value="180000">3 min</option>
+        <option value="300000">5 min</option>
+      </select>
+    </div>
     <button id="start-scan-btn" class="btn btn-primary mt-12">Start Liveness Scan</button>
     <button id="change-key-btn" class="btn btn-secondary mt-12">Change API Key</button>
   </div>
@@ -52,7 +61,10 @@
   <div id="section-scanning" class="section">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
       <span class="status-badge status-scanning" id="scan-status-badge">Scanning</span>
-      <button id="stop-scan-btn" class="btn btn-danger" style="width:auto; padding:6px 16px; font-size:12px;">Stop</button>
+      <div style="display:flex; gap:6px;">
+        <button id="scan-all-btn" class="btn btn-secondary" style="width:auto; padding:6px 16px; font-size:12px; display:none;">Scan All</button>
+        <button id="stop-scan-btn" class="btn btn-danger" style="width:auto; padding:6px 16px; font-size:12px;">Stop</button>
+      </div>
     </div>
     <div id="participants-container">
       <div class="empty-state" id="no-participants">

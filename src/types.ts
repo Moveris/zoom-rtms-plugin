@@ -6,6 +6,7 @@ export interface ParticipantResult {
   result: LivenessResult | null;
   completedAt: Date;
   error?: string;
+  scanCount?: number;
 }
 
 export interface SessionStatus {

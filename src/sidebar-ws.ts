@@ -126,7 +126,8 @@ export class SidebarWsServer {
         }
         // Host can opt out of being scanned to save tokens
         const excludeUserId = msg.excludeSelf ? info.userId : undefined;
-        this.orchestrator.registerPendingSession(info.meetingUuid, apiKey, excludeUserId);
+        const rescanIntervalMs = typeof msg.rescanInterval === "number" && msg.rescanInterval > 0 ? msg.rescanInterval : undefined;
+        this.orchestrator.registerPendingSession(info.meetingUuid, apiKey, excludeUserId, rescanIntervalMs);
         this.broadcast(info.meetingUuid, { type: "session_state", state: "pending" });
         console.log(`Sidebar requested start — meeting=${info.meetingUuid} user=${info.userId}${excludeUserId ? " (excluding self)" : ""}`);
         break;

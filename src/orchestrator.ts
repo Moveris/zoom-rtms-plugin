@@ -56,6 +56,7 @@ interface PendingSession {
   meetingUuid: string;
   apiKey?: string;
   excludeUserId?: string;
+  rescanIntervalMs?: number;
   createdAt: Date;
 }
 
@@ -84,28 +85,29 @@ export class SessionOrchestrator {
     return this.sessions.size;
   }
 
-  registerPendingSession(meetingUuid: string, apiKey?: string, excludeUserId?: string): void {
+  registerPendingSession(meetingUuid: string, apiKey?: string, excludeUserId?: string, rescanIntervalMs?: number): void {
     this.pendingSessions.set(meetingUuid, {
       meetingUuid,
       apiKey,
       excludeUserId,
+      rescanIntervalMs,
       createdAt: new Date(),
     });
-    console.log(`Pending session registered: meeting=${meetingUuid}${excludeUserId ? ` excludeUser=${excludeUserId}` : ""}`);
+    console.log(`Pending session registered: meeting=${meetingUuid}${excludeUserId ? ` excludeUser=${excludeUserId}` : ""}${rescanIntervalMs ? ` rescanInterval=${rescanIntervalMs}ms` : ""}`);
   }
 
   hasPendingSession(meetingUuid: string): boolean {
     return this.pendingSessions.has(meetingUuid);
   }
 
-  consumePendingSession(meetingUuid: string): { apiKey?: string; excludeUserId?: string } | undefined {
+  consumePendingSession(meetingUuid: string): { apiKey?: string; excludeUserId?: string; rescanIntervalMs?: number } | undefined {
     const pending = this.pendingSessions.get(meetingUuid);
     if (!pending) return undefined;
     this.pendingSessions.delete(meetingUuid);
-    return { apiKey: pending.apiKey, excludeUserId: pending.excludeUserId };
+    return { apiKey: pending.apiKey, excludeUserId: pending.excludeUserId, rescanIntervalMs: pending.rescanIntervalMs };
   }
 
-  startSession(meetingUuid: string, rtmsPayload: Record<string, any>, apiKey?: string, excludeUserId?: string): void {
+  startSession(meetingUuid: string, rtmsPayload: Record<string, any>, apiKey?: string, excludeUserId?: string, rescanIntervalMs?: number): void {
     if (this.sessions.size >= this.config.MAX_CONCURRENT_SESSIONS) {
       throw new TooManySessions(
         `Cannot start session ${meetingUuid}: max ${this.config.MAX_CONCURRENT_SESSIONS} concurrent sessions`,
@@ -139,10 +141,11 @@ export class SessionOrchestrator {
       this.onStage,
       this.onResult,
       excludeUserId,
+      rescanIntervalMs,
     );
     this.sessions.set(meetingUuid, session);
     session.start();
-    console.log(`Session started: meeting=${meetingUuid}${excludeUserId ? ` excludeUser=${excludeUserId}` : ""}`);
+    console.log(`Session started: meeting=${meetingUuid}${excludeUserId ? ` excludeUser=${excludeUserId}` : ""}${rescanIntervalMs ? ` rescan=${rescanIntervalMs}ms` : ""}`);
   }
 
   retryParticipant(meetingUuid: string, participantId: string): boolean {
@@ -193,6 +196,9 @@ class Session {
   private onStage: StageCallback | null;
   private onResult: ResultCallback | null;
   private excludeUserId: string | undefined;
+  private rescanIntervalMs: number | undefined;
+  private rescanTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private scanCounts = new Map<string, number>();
 
   constructor(
     meetingUuid: string,
@@ -204,6 +210,7 @@ class Session {
     onStage: StageCallback | null,
     onResult: ResultCallback | null,
     excludeUserId?: string,
+    rescanIntervalMs?: number,
   ) {
     this.meetingUuid = meetingUuid;
     this.resultStore = resultStore;
@@ -213,8 +220,12 @@ class Session {
     this.onStage = onStage;
     this.onResult = onResult;
     this.excludeUserId = excludeUserId;
+    this.rescanIntervalMs = rescanIntervalMs && rescanIntervalMs > 0 ? rescanIntervalMs : undefined;
     if (excludeUserId) {
       console.log(`Session excluding userId=${excludeUserId} from scanning — meeting=${meetingUuid}`);
+    }
+    if (this.rescanIntervalMs) {
+      console.log(`Background re-scanning enabled — interval=${this.rescanIntervalMs}ms meeting=${meetingUuid}`);
     }
     this.rtms = new RTMSClient(
       meetingUuid,
@@ -258,6 +269,9 @@ class Session {
     const state = this.participants.get(participantId);
     if (!state) return false;
 
+    // Cancel any pending rescan timer to prevent double-scan
+    this.cancelRescanTimer(participantId);
+
     // Clean up existing timers and decoder
     clearInterval(state.checkInterval);
     clearTimeout(state.timeout);
@@ -278,6 +292,11 @@ class Session {
 
   close(): void {
     this.rtms.close();
+    // Clear all rescan timers
+    for (const timer of this.rescanTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.rescanTimers.clear();
     for (const [, state] of this.participants) {
       clearInterval(state.checkInterval);
       clearTimeout(state.timeout);
@@ -432,6 +451,14 @@ class Session {
   }
 
   private async submitToMoveris(participantId: string, frames: CapturedFrame[]): Promise<void> {
+    // Increment scan count for this participant
+    const count = (this.scanCounts.get(participantId) ?? 0) + 1;
+    this.scanCounts.set(participantId, count);
+
+    // Resolve the participant's display name (may still be in the map for silent retries)
+    const state = this.participants.get(participantId);
+    const userName = state?.userName ?? participantId;
+
     try {
       const result = await this.livenessClient.fastCheck(frames, {
         sessionId: generateSessionId(),
@@ -443,13 +470,17 @@ class Session {
         participantId,
         result,
         completedAt: new Date(),
+        scanCount: count,
       };
 
       this.resultStore.setResult(this.meetingUuid, participantId, participantResult);
       this.onResult?.(this.meetingUuid, participantId, participantResult);
       console.log(
-        `Liveness result — meeting=${this.meetingUuid} participant=${participantId} verdict=${result.verdict} score=${result.score}`,
+        `Liveness result — meeting=${this.meetingUuid} participant=${participantId} verdict=${result.verdict} score=${result.score} scan=#${count}`,
       );
+
+      // Schedule next background rescan
+      this.scheduleRescan(participantId, userName);
     } catch (err) {
       let errorCode = String(err);
 
@@ -474,10 +505,61 @@ class Session {
         result: null,
         completedAt: new Date(),
         error: errorCode,
+        scanCount: count,
       };
 
       this.resultStore.setResult(this.meetingUuid, participantId, errorResult);
       this.onResult?.(this.meetingUuid, participantId, errorResult);
+
+      // Schedule next background rescan even on error
+      this.scheduleRescan(participantId, userName);
+    }
+  }
+
+  /**
+   * Schedule a background rescan for a participant after the configured interval.
+   * No-op if rescan is disabled (rescanIntervalMs is undefined).
+   */
+  private scheduleRescan(participantId: string, userName: string): void {
+    if (!this.rescanIntervalMs) return;
+
+    this.cancelRescanTimer(participantId);
+
+    const timer = setTimeout(() => {
+      this.rescanTimers.delete(participantId);
+      this.silentRetry(participantId, userName);
+    }, this.rescanIntervalMs);
+
+    this.rescanTimers.set(participantId, timer);
+    console.log(`Background rescan scheduled — participant=${participantId} in ${this.rescanIntervalMs}ms meeting=${this.meetingUuid}`);
+  }
+
+  /**
+   * Silent retry — resets the participant for a new scan WITHOUT emitting
+   * stage/progress callbacks that would visually reset the card.
+   * The sidebar keeps showing the last verdict until the new result arrives.
+   */
+  private silentRetry(participantId: string, userName: string): void {
+    const state = this.participants.get(participantId);
+    if (state) {
+      clearInterval(state.checkInterval);
+      clearTimeout(state.timeout);
+      if (!state.done) {
+        state.decoder.cancel();
+      }
+    }
+
+    // Remove participant so the next H264 chunk creates a fresh batch collector
+    this.participants.delete(participantId);
+    console.log(`Background rescan started — participant=${participantId} name=${userName} meeting=${this.meetingUuid}`);
+    // No onStage or onProgress calls — the card stays showing the last verdict
+  }
+
+  private cancelRescanTimer(participantId: string): void {
+    const existing = this.rescanTimers.get(participantId);
+    if (existing) {
+      clearTimeout(existing);
+      this.rescanTimers.delete(participantId);
     }
   }
 

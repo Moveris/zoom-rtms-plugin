@@ -70,6 +70,7 @@ orchestrator.onResult = (meetingUuid, participantId, result) => {
     score: result.result?.score ?? null,
     confidence: result.result?.confidence ?? null,
     error: result.error ?? null,
+    scanCount: result.scanCount ?? 1,
   });
 };
 
