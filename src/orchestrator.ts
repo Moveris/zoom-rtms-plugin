@@ -478,6 +478,7 @@ class Session {
       const result = await this.livenessClient.fastCheck(frames, {
         sessionId: generateSessionId(),
         source: "live",
+        model: "hybrid-v2-30",
       });
 
       const participantResult: ParticipantResult = {

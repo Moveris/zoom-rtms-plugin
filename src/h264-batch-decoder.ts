@@ -12,6 +12,9 @@ const RAW_FRAME_SIZE = TARGET_WIDTH * TARGET_HEIGHT * 3;
 /** Duration of H264 data to accumulate before batch decoding. */
 const ACCUMULATE_DURATION_MS = 4_000;
 
+/** Number of consecutive frames to select for Moveris liveness analysis. */
+const FRAME_COUNT = 30;
+
 /** If no data arrives for this long during accumulation, abort. */
 const INACTIVITY_TIMEOUT_MS = 5_000;
 
@@ -56,7 +59,7 @@ function parseNalType(chunk: Buffer): number | null {
 }
 
 export interface BatchDecodeResult {
-  /** 10 consecutive PNG buffers, 640x480. */
+  /** Consecutive PNG buffers, 640x480 (FRAME_COUNT frames). */
   frames: Buffer[];
 }
 
@@ -146,7 +149,7 @@ export class H264BatchDecoder {
 
   /**
    * Decode all accumulated H264 data in one shot.
-   * Returns 10 consecutive PNG frames (640x480) from the middle of the decoded video.
+   * Returns FRAME_COUNT consecutive PNG frames (640x480) from the middle of the decoded video.
    */
   async decode(): Promise<BatchDecodeResult> {
     this.done = true;
@@ -185,20 +188,20 @@ export class H264BatchDecoder {
         `from ${h264Data.length} bytes (${(rawFrames.length / Math.max(elapsedMs / 1000, 0.1)).toFixed(1)} effective fps)`,
       );
 
-      if (rawFrames.length < 10) {
+      if (rawFrames.length < FRAME_COUNT) {
         throw new Error(
           `Only decoded ${rawFrames.length} frames from ${h264Data.length} bytes ` +
           `(${this.chunkCount} chunks over ${(elapsedMs / 1000).toFixed(1)}s). ` +
-          `NAL types: {${nalSummary}}. Need at least 10 frames.`,
+          `NAL types: {${nalSummary}}. Need at least ${FRAME_COUNT} frames.`,
         );
       }
 
-      // Pick 10 CONSECUTIVE frames from the middle of the batch.
+      // Pick FRAME_COUNT CONSECUTIVE frames from the middle of the batch.
       // Moveris requires temporal continuity — frames MUST be consecutive.
-      const startIdx = Math.floor((rawFrames.length - 10) / 2);
-      const selectedRaw = rawFrames.slice(startIdx, startIdx + 10);
+      const startIdx = Math.floor((rawFrames.length - FRAME_COUNT) / 2);
+      const selectedRaw = rawFrames.slice(startIdx, startIdx + FRAME_COUNT);
 
-      console.log(`[H264Diag:${this.label}] Selected consecutive frames ${startIdx}-${startIdx + 9} out of ${rawFrames.length}`);
+      console.log(`[H264Diag:${this.label}] Selected consecutive frames ${startIdx}-${startIdx + FRAME_COUNT - 1} out of ${rawFrames.length}`);
 
       // Convert each raw RGB frame to 640x480 PNG
       const pngFrames = await Promise.all(

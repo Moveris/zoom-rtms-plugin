@@ -47,8 +47,8 @@ LivenessResult: verdict=live|fake, score=0-100
 | 1 | Zoom fires `meeting.rtms_started` webhook. The plugin validates the signature using `rtms.createWebhookHandler()` and starts a session (or waits for sidebar-initiated start if `AUTO_START_RTMS=false`). |
 | 2 | `RTMSClient` (wrapping `@zoom/rtms` SDK `Client`) joins the RTMS stream and receives raw H264 video chunks per participant at 30 FPS HD. |
 | 3 | `H264BatchDecoder` accumulates ~4 seconds of H264 data per participant, then decodes the batch in a single FFmpeg invocation to raw RGB frames. |
-| 4 | 10 consecutive frames are selected from the middle of the decoded batch, converted to 640x480 PNGs via `sharp`. |
-| 5 | Frames are submitted to `LivenessClient.fastCheck()` from `@moveris/shared` with `source: "live"`. |
+| 4 | 30 consecutive frames are selected from the middle of the decoded batch, converted to 640x480 PNGs via `sharp`. |
+| 5 | Frames are submitted to `LivenessClient.fastCheck()` from `@moveris/shared` with `model: "hybrid-v2-30"` and `source: "live"`. |
 | 6 | Moveris returns a verdict (`live` / `fake`), score (0-100), and confidence. |
 | 7 | Results are stored and pushed to the in-meeting sidebar via WebSocket, and available at `GET /results/{meeting_uuid}`. |
 
@@ -293,7 +293,7 @@ For each participant detected in the RTMS video stream:
 
 1. **Accumulate** — Raw H264 NAL units are fed into `H264BatchDecoder` for ~4 seconds
 2. **Batch decode** — All accumulated H264 data is written to a temp file and decoded in a single FFmpeg invocation to raw RGB frames
-3. **Select** — 10 consecutive frames are selected from the middle of the decoded batch (Moveris requires temporal continuity)
+3. **Select** — 30 consecutive frames are selected from the middle of the decoded batch (Moveris requires temporal continuity)
 4. **Convert** — Selected frames are resized to 640x480 and encoded as PNG via `sharp`
 5. **Submit** — `LivenessClient.fastCheck(frames, { sessionId, source: "live" })` sends frames for server-side face detection and liveness analysis
 6. **Timeout** — If H264 data isn't accumulated within 30 seconds or no data arrives for 5 seconds, the participant is marked with an error
