@@ -63,6 +63,10 @@ The plugin includes a Zoom App sidebar that hosts can open during meetings:
 - **Real-time results** — Per-participant progress bars and liveness verdicts update live via WebSocket
 - **Per-participant retry** — Rescan button on each participant card to re-run liveness analysis without restarting the full session
 - **Late joiners** — Participants who join after the scan starts are automatically picked up and scanned
+- **Host self-exclusion** — "Exclude self" toggle lets the host skip their own scan to save API tokens
+- **Continuous re-scanning** — Optional periodic re-scans (1/3/5 min intervals) to detect mid-meeting deepfake swaps. Runs silently in the background — the card shows the last verdict until a new result arrives, then flashes if the verdict changes
+- **"Scan All Now" button** — Triggers an immediate re-scan of all participants with completed results
+- **Camera toggle detection** — Automatically re-scans a participant when they turn their camera off and back on (5+ second gap). Always active regardless of periodic re-scan settings, since camera toggling is a potential indicator of a deepfake swap
 
 The sidebar uses the Zoom Apps SDK (`@zoom/appssdk`) to authenticate via encrypted Zoom app context, and communicates with the backend over JWT-secured REST and WebSocket endpoints.
 
@@ -293,15 +297,17 @@ For each participant detected in the RTMS video stream:
 4. **Convert** — Selected frames are resized to 640x480 and encoded as PNG via `sharp`
 5. **Submit** — `LivenessClient.fastCheck(frames, { sessionId, source: "live" })` sends frames for server-side face detection and liveness analysis
 6. **Timeout** — If H264 data isn't accumulated within 30 seconds or no data arrives for 5 seconds, the participant is marked with an error
+7. **Re-scan** — After a result, if periodic re-scanning is enabled, `scheduleRescan()` sets a timer. When it fires, `silentRetry()` deletes the participant state so the next H264 chunk restarts the pipeline silently
+8. **Camera toggle** — Even after a scan completes, `onH264Chunk()` tracks the timestamp of every received chunk. If a chunk arrives after a 5+ second gap (camera was off and came back on), an immediate silent re-scan is triggered
 
 ### Sidebar real-time flow
 
 1. **Auth** — Sidebar loads Zoom Apps SDK, calls `getAppContext()`, POSTs encrypted context to `/api/sidebar/auth`, receives JWT
 2. **Connect** — Sidebar opens WebSocket to `/ws/sidebar?token=JWT`, joins the meeting room
 3. **API key** — Host enters Moveris API key, POSTs to `/api/sidebar/api-key`
-4. **Start scan** — Host clicks "Start Scan", sidebar sends `start_monitoring` over WebSocket
+4. **Start scan** — Host clicks "Start Scan" (with optional "Exclude self" and re-scan interval settings), sidebar sends `start_monitoring` over WebSocket
 5. **Progress** — Backend pushes `scan_progress` (seconds accumulated), `stage` updates (connected/recording/decoding/analyzing), and `participant_result` verdicts
-6. **Display** — Sidebar UI updates in real-time with progress bars and verdict badges
+6. **Display** — Sidebar UI updates in real-time with progress bars, verdict badges, and a "Monitoring" status when background re-scanning is active. Verdict changes from re-scans trigger a visual alert flash on the participant card
 
 ### Error handling
 
