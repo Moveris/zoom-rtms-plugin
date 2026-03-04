@@ -14,6 +14,8 @@ import type { ParticipantResult } from "./types.js";
 const ACCUMULATION_CHECK_INTERVAL_MS = 250;
 /** Max time to wait for H264 data before giving up (ms). */
 const ACCUMULATION_TIMEOUT_MS = 30_000;
+/** Gap in H264 chunks that indicates camera was off and came back on (ms). */
+const CAMERA_RETURN_THRESHOLD_MS = 5_000;
 
 export class TooManySessions extends Error {}
 
@@ -23,6 +25,7 @@ interface ParticipantState {
   userName: string;
   checkInterval: ReturnType<typeof setInterval>;
   timeout: ReturnType<typeof setTimeout>;
+  lastChunkTime: number;
 }
 
 /**
@@ -340,13 +343,25 @@ class Session {
         userName: displayName,
         checkInterval,
         timeout,
+        lastChunkTime: Date.now(),
       };
       this.participants.set(participantId, state);
       console.log(`Spawned batch collector — meeting=${this.meetingUuid} participant=${participantId} name=${displayName}`);
     }
 
-    if (state.done) return;
+    if (state.done) {
+      const now = Date.now();
+      const gap = now - state.lastChunkTime;
+      state.lastChunkTime = now;
+      if (gap >= CAMERA_RETURN_THRESHOLD_MS) {
+        console.log(`Camera returned after ${Math.round(gap / 1000)}s — auto-rescanning participant=${participantId} meeting=${this.meetingUuid}`);
+        this.cancelRescanTimer(participantId);
+        this.silentRetry(participantId, state.userName);
+      }
+      return;
+    }
 
+    state.lastChunkTime = Date.now();
     // Feed raw H264 data into the batch decoder
     state.decoder.feed(h264Data);
   }
