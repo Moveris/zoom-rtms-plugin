@@ -429,6 +429,7 @@ class Session {
         firstChunkTime,
         lastChunkTime,
         totalDecodedFrames,
+        estimatedTotalFrames,
         selectedStartIndex,
       } = await state.decoder.decode();
 
@@ -440,13 +441,15 @@ class Session {
       );
 
       // Reconstruct per-frame timestamps from accumulation timing.
-      // The batch spans firstChunkTime..lastChunkTime with totalDecodedFrames frames.
-      // Selected frames start at selectedStartIndex, so each frame's real time is:
+      // Use estimatedTotalFrames (chunk count from the full clip) rather than
+      // totalDecodedFrames (which is capped by FFMPEG_MAX_FRAMES) so timestamps
+      // reflect the real temporal span of the video.
       const accDuration = lastChunkTime - firstChunkTime;
+      const frameCount = estimatedTotalFrames || totalDecodedFrames;
       const capturedFrames: CapturedFrame[] = pngFrames.map((png, i) => ({
         index: i,
         timestampMs: Math.round(
-          firstChunkTime + ((selectedStartIndex + i) / totalDecodedFrames) * accDuration,
+          firstChunkTime + ((selectedStartIndex + i) / frameCount) * accDuration,
         ),
         pixels: png.toString("base64"),
       }));

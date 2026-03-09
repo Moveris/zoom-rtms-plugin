@@ -18,6 +18,16 @@ const FRAME_COUNT = 10;
 /** If no data arrives for this long during accumulation, abort. */
 const INACTIVITY_TIMEOUT_MS = 5_000;
 
+/** Max time to allow ffmpeg to run before killing it (ms). */
+const FFMPEG_TIMEOUT_MS = 30_000;
+
+/**
+ * Max frames to output from ffmpeg. At 30fps over 4s we'd get ~120 frames
+ * (118MB of raw RGB), which OOM-kills the 512MB Fly VM. Capping at 40 frames
+ * (~37MB) keeps peak memory well under the limit. We only need 10 consecutive.
+ */
+const FFMPEG_MAX_FRAMES = 40;
+
 /** How often to log a delivery-rate summary during accumulation. */
 const DIAG_LOG_INTERVAL_MS = 1_000;
 
@@ -65,9 +75,11 @@ export interface BatchDecodeResult {
   firstChunkTime: number;
   /** Timestamp (ms since epoch) when the last H264 chunk was received. */
   lastChunkTime: number;
-  /** Total number of frames decoded by ffmpeg (before selection). */
+  /** Total number of frames decoded by ffmpeg (may be capped by FFMPEG_MAX_FRAMES). */
   totalDecodedFrames: number;
-  /** Index of the first selected frame within the full decoded batch. */
+  /** Estimated total frames in the full H264 clip (from chunk count, uncapped). */
+  estimatedTotalFrames: number;
+  /** Index of the first selected frame within the decoded batch. */
   selectedStartIndex: number;
 }
 
@@ -227,6 +239,7 @@ export class H264BatchDecoder {
         firstChunkTime: this.firstChunkTime!,
         lastChunkTime: this.lastChunkTime!,
         totalDecodedFrames: rawFrames.length,
+        estimatedTotalFrames: this.chunkCount,
         selectedStartIndex: startIdx,
       };
     } finally {
@@ -243,16 +256,21 @@ export class H264BatchDecoder {
 }
 
 /**
- * Run ffmpeg on an H264 file and return all decoded raw RGB frames.
+ * Run ffmpeg on an H264 file and return decoded raw RGB frames.
+ * Limits output to FFMPEG_MAX_FRAMES to avoid OOM on constrained VMs.
+ * Streams frames incrementally instead of buffering all output at once.
  */
 function runFfmpeg(inputPath: string, label = "unknown"): Promise<Buffer[]> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+
     const ffmpeg = spawn("ffmpeg", [
       "-hide_banner",
       "-loglevel", "info",
       "-f", "h264",
       "-i", inputPath,
       "-vf", `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black`,
+      "-frames:v", String(FFMPEG_MAX_FRAMES),
       "-f", "rawvideo",
       "-pix_fmt", "rgb24",
       "pipe:1",
@@ -260,11 +278,32 @@ function runFfmpeg(inputPath: string, label = "unknown"): Promise<Buffer[]> {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const outputChunks: Buffer[] = [];
+    // Kill ffmpeg if it doesn't finish in time
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        console.error(
+          `[H264Diag:${label}] ffmpeg timeout after ${FFMPEG_TIMEOUT_MS / 1000}s — killing process (pid=${ffmpeg.pid})`,
+        );
+        ffmpeg.kill("SIGKILL");
+        reject(new Error(`ffmpeg timed out after ${FFMPEG_TIMEOUT_MS / 1000}s`));
+      }
+    }, FFMPEG_TIMEOUT_MS);
+
+    // Stream-process frames: extract complete frames as they arrive
+    // instead of buffering all output into one giant buffer.
+    const frames: Buffer[] = [];
+    let pending = Buffer.alloc(0);
+    let totalOutputBytes = 0;
     let stderrOutput = "";
 
     ffmpeg.stdout.on("data", (chunk: Buffer) => {
-      outputChunks.push(chunk);
+      totalOutputBytes += chunk.length;
+      pending = Buffer.concat([pending, chunk]);
+      while (pending.length >= RAW_FRAME_SIZE) {
+        frames.push(Buffer.from(pending.subarray(0, RAW_FRAME_SIZE)));
+        pending = pending.subarray(RAW_FRAME_SIZE);
+      }
     });
 
     ffmpeg.stderr.on("data", (data: Buffer) => {
@@ -272,29 +311,22 @@ function runFfmpeg(inputPath: string, label = "unknown"): Promise<Buffer[]> {
     });
 
     ffmpeg.on("close", (code) => {
-      // Always log ffmpeg output for diagnostics (upgraded from warn to log)
+      clearTimeout(timer);
+      if (settled) return; // already rejected by timeout
+      settled = true;
+
+      // Always log ffmpeg output for diagnostics
       if (stderrOutput.trim()) {
         console.log(`[H264Diag:${label}] ffmpeg stderr (exit=${code}):\n${stderrOutput.trim()}`);
       }
 
-      // Concatenate all output and split into frames
-      const allOutput = Buffer.concat(outputChunks);
-      const frames: Buffer[] = [];
-      let offset = 0;
-
-      while (offset + RAW_FRAME_SIZE <= allOutput.length) {
-        frames.push(Buffer.from(allOutput.subarray(offset, offset + RAW_FRAME_SIZE)));
-        offset += RAW_FRAME_SIZE;
-      }
-
-      const remainderBytes = allOutput.length - offset;
       console.log(
-        `[H264Diag:${label}] ffmpeg output: ${allOutput.length} bytes → ${frames.length} frames ` +
-        `(${RAW_FRAME_SIZE} bytes/frame, remainder=${remainderBytes} bytes)`,
+        `[H264Diag:${label}] ffmpeg output: ${totalOutputBytes} bytes → ${frames.length} frames ` +
+        `(${RAW_FRAME_SIZE} bytes/frame, remainder=${pending.length} bytes)`,
       );
 
       if (frames.length === 0 && code !== 0) {
-        reject(new Error(`ffmpeg exited with code ${code}, decoded 0 frames. Output size: ${allOutput.length} bytes`));
+        reject(new Error(`ffmpeg exited with code ${code}, decoded 0 frames. Output size: ${totalOutputBytes} bytes`));
         return;
       }
 
@@ -302,6 +334,9 @@ function runFfmpeg(inputPath: string, label = "unknown"): Promise<Buffer[]> {
     });
 
     ffmpeg.on("error", (err) => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
       reject(new Error(`ffmpeg spawn error: ${err.message}`));
     });
   });
