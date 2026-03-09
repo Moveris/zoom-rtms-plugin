@@ -424,7 +424,13 @@ class Session {
     this.onStage?.(this.meetingUuid, participantId, state.userName, "decoding");
 
     try {
-      const { frames: pngFrames } = await state.decoder.decode();
+      const {
+        frames: pngFrames,
+        firstChunkTime,
+        lastChunkTime,
+        totalDecodedFrames,
+        selectedStartIndex,
+      } = await state.decoder.decode();
 
       const pngSizes = pngFrames.map((p) => p.length);
       const avgPngSize = Math.round(pngSizes.reduce((a, b) => a + b, 0) / pngSizes.length);
@@ -433,10 +439,15 @@ class Session {
         `frames=${pngFrames.length} avgPngSize=${avgPngSize}B`,
       );
 
-      // Build CapturedFrame objects from the 10 consecutive PNG frames
+      // Reconstruct per-frame timestamps from accumulation timing.
+      // The batch spans firstChunkTime..lastChunkTime with totalDecodedFrames frames.
+      // Selected frames start at selectedStartIndex, so each frame's real time is:
+      const accDuration = lastChunkTime - firstChunkTime;
       const capturedFrames: CapturedFrame[] = pngFrames.map((png, i) => ({
         index: i,
-        timestampMs: Date.now(),
+        timestampMs: Math.round(
+          firstChunkTime + ((selectedStartIndex + i) / totalDecodedFrames) * accDuration,
+        ),
         pixels: png.toString("base64"),
       }));
 
@@ -478,7 +489,6 @@ class Session {
       const result = await this.livenessClient.fastCheck(frames, {
         sessionId: generateSessionId(),
         source: "live",
-        model: "hybrid-v2-30",
       });
 
       const participantResult: ParticipantResult = {

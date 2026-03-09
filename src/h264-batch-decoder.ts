@@ -13,7 +13,7 @@ const RAW_FRAME_SIZE = TARGET_WIDTH * TARGET_HEIGHT * 3;
 const ACCUMULATE_DURATION_MS = 4_000;
 
 /** Number of consecutive frames to select for Moveris liveness analysis. */
-const FRAME_COUNT = 30;
+const FRAME_COUNT = 10;
 
 /** If no data arrives for this long during accumulation, abort. */
 const INACTIVITY_TIMEOUT_MS = 5_000;
@@ -61,6 +61,14 @@ function parseNalType(chunk: Buffer): number | null {
 export interface BatchDecodeResult {
   /** Consecutive PNG buffers, 640x480 (FRAME_COUNT frames). */
   frames: Buffer[];
+  /** Timestamp (ms since epoch) when the first H264 chunk was received. */
+  firstChunkTime: number;
+  /** Timestamp (ms since epoch) when the last H264 chunk was received. */
+  lastChunkTime: number;
+  /** Total number of frames decoded by ffmpeg (before selection). */
+  totalDecodedFrames: number;
+  /** Index of the first selected frame within the full decoded batch. */
+  selectedStartIndex: number;
 }
 
 /**
@@ -214,7 +222,13 @@ export class H264BatchDecoder {
         ),
       );
 
-      return { frames: pngFrames };
+      return {
+        frames: pngFrames,
+        firstChunkTime: this.firstChunkTime!,
+        lastChunkTime: this.lastChunkTime!,
+        totalDecodedFrames: rawFrames.length,
+        selectedStartIndex: startIdx,
+      };
     } finally {
       // Clean up temp file
       await unlink(tmpPath).catch(() => {});
