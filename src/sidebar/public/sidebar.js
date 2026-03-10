@@ -8,6 +8,89 @@ var ws = null;
 var participants = new Map();
 var sessionStage = null; // null | "pending" | "connected" | "recording" | "analyzing" | "complete" | "error"
 
+// --- Demo mode helpers ---
+function demoLiveScore() { return Math.floor(Math.random() * 18) + 75; }   // 75-92
+function demoFakeScore() { return Math.floor(Math.random() * 26) + 15; }   // 15-40
+function demoConfidence() { return Math.floor(Math.random() * 11) + 85; }  // 85-95
+
+function applyDemoResult(pid, verdict) {
+  var p = participants.get(pid);
+  if (!p) return;
+  var prev = p.verdict;
+  p.verdict = verdict;
+  p.score = verdict === "live" ? demoLiveScore() : demoFakeScore();
+  p.confidence = demoConfidence();
+  p.error = null;
+  p.stage = "done";
+  p.lastCheckedAt = Date.now();
+  p.scanCount = (p.scanCount || 0) + 1;
+  p.verdictChanged = prev != null && prev !== verdict;
+  participants.set(pid, p);
+  renderParticipants();
+}
+
+function demoScanAll(verdict) {
+  var eligible = [];
+  participants.forEach(function (data, pid) {
+    if (data.stage === "done") eligible.push(pid);
+  });
+  if (eligible.length === 0) return;
+
+  eligible.forEach(function (pid, index) {
+    var staggerDelay = index * (500 + Math.floor(Math.random() * 400));
+
+    setTimeout(function () {
+      var p = participants.get(pid);
+      if (!p) return;
+      p.verdict = null; p.score = null; p.error = null;
+      p.stage = "recording"; p.framesCollected = 0; p.framesNeeded = 4;
+      p.verdictChanged = false;
+      participants.set(pid, p);
+      sessionStage = "recording";
+      updateSessionBadge();
+      renderParticipants();
+
+      // Simulate frame ticks
+      var ticks = 4;
+      for (var f = 1; f <= ticks; f++) {
+        (function (tick) {
+          setTimeout(function () {
+            var pp = participants.get(pid);
+            if (!pp || pp.stage !== "recording") return;
+            pp.framesCollected = tick;
+            participants.set(pid, pp);
+            renderParticipants();
+          }, tick * 150);
+        })(f);
+      }
+
+      // Switch to analyzing
+      var analyzeDelay = ticks * 150 + 100;
+      setTimeout(function () {
+        var pp = participants.get(pid);
+        if (!pp) return;
+        pp.stage = "analyzing";
+        participants.set(pid, pp);
+        renderParticipants();
+      }, analyzeDelay);
+
+      // Deliver verdict
+      var resultDelay = analyzeDelay + 800 + Math.floor(Math.random() * 600);
+      setTimeout(function () {
+        applyDemoResult(pid, verdict);
+        // Check if all done
+        var allDone = true;
+        participants.forEach(function (pd) { if (pd.stage !== "done") allDone = false; });
+        if (allDone && participants.size > 0) {
+          var rescanEnabled = rescanSelect && parseInt(rescanSelect.value, 10) > 0;
+          sessionStage = rescanEnabled ? "monitoring" : "complete";
+          updateSessionBadge();
+        }
+      }, resultDelay);
+    }, staggerDelay);
+  });
+}
+
 // --- DOM refs ---
 var sectionLoading = document.getElementById("section-loading");
 var sectionSetup = document.getElementById("section-setup");
@@ -221,33 +304,68 @@ stopScanBtn.addEventListener("click", async function () {
   }
 });
 
-// --- Scan All ---
+// --- Scan All (with demo mode on double/triple-click) ---
+var scanAllClickTimer = null;
 if (scanAllBtn) {
-  scanAllBtn.addEventListener("click", function () {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    var count = 0;
-    participants.forEach(function (data, pid) {
-      if (data.stage === "done") {
-        ws.send(JSON.stringify({ type: "retry_participant", meetingUuid: meetingUuid, participantId: pid }));
-        // Reset local state for responsive UI
-        data.verdict = null;
-        data.score = null;
-        data.error = null;
-        data.stage = "recording";
-        data.framesCollected = 0;
-        data.framesNeeded = 4;
-        data.verdictChanged = false;
-        participants.set(pid, data);
-        count++;
-      }
-    });
-    if (count > 0) {
-      sessionStage = "recording";
-      updateSessionBadge();
-      renderParticipants();
+  scanAllBtn.addEventListener("click", function (e) {
+    if (e.detail >= 2) {
+      // Double/triple-click → demo mode (cancel pending real scan)
+      if (scanAllClickTimer) { clearTimeout(scanAllClickTimer); scanAllClickTimer = null; }
+      demoScanAll(e.detail >= 3 ? "fake" : "live");
+      return;
     }
+    // Single click: debounce 300ms to allow double-click detection
+    scanAllClickTimer = setTimeout(function () {
+      scanAllClickTimer = null;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      var count = 0;
+      participants.forEach(function (data, pid) {
+        if (data.stage === "done") {
+          ws.send(JSON.stringify({ type: "retry_participant", meetingUuid: meetingUuid, participantId: pid }));
+          data.verdict = null;
+          data.score = null;
+          data.error = null;
+          data.stage = "recording";
+          data.framesCollected = 0;
+          data.framesNeeded = 4;
+          data.verdictChanged = false;
+          participants.set(pid, data);
+          count++;
+        }
+      });
+      if (count > 0) {
+        sessionStage = "recording";
+        updateSessionBadge();
+        renderParticipants();
+      }
+    }, 300);
   });
 }
+
+// --- Per-participant demo (double-click → LIVE, triple-click → FAKE) ---
+participantsContainer.addEventListener("click", function (e) {
+  if (e.detail < 2) return;
+  if (e.target.closest(".btn-retry")) return;
+  var card = e.target.closest(".participant-card");
+  if (!card) return;
+  var pid = card.dataset.pid;
+  if (!pid) return;
+  window.getSelection().removeAllRanges();
+
+  var verdict = e.detail >= 3 ? "fake" : "live";
+  var p = participants.get(pid);
+  if (!p) return;
+
+  // Brief "analyzing" animation before showing result
+  p.verdict = null; p.score = null; p.error = null;
+  p.stage = "analyzing"; p.verdictChanged = false;
+  participants.set(pid, p);
+  renderParticipants();
+
+  setTimeout(function () {
+    applyDemoResult(pid, verdict);
+  }, 700 + Math.floor(Math.random() * 500));
+});
 
 // --- WebSocket ---
 function connectWebSocket() {
